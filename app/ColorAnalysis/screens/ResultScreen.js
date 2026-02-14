@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import { analyzeSkinImage } from '../services/colorAnalysisGemini';
 import { GEMINI_API_KEY } from '../geminiConfig';
+import { quizAPI } from '../../../src/api';
 
 const { width } = Dimensions.get('window');
 const CARD_PADDING = 14;
@@ -27,6 +28,7 @@ export default function ResultScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const photoUri = params?.photoUri;
+  const fromDashboard = params?.fromDashboard === 'true';
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -35,12 +37,47 @@ export default function ResultScreen() {
 
   useEffect(() => {
     if (!photoUri) {
-      setError('No photo to analyze.');
-      setLoading(false);
+      // If coming from dashboard, try to load saved result
+      if (fromDashboard) {
+        loadSavedResult();
+      } else {
+        setError('No photo to analyze.');
+        setLoading(false);
+      }
       return;
     }
     runAnalysis();
-  }, [photoUri]);
+  }, [photoUri, fromDashboard]);
+
+  const loadSavedResult = async () => {
+    try {
+      setLoading(true);
+      const response = await quizAPI.getQuizResult('color_analysis');
+      if (response && response.result) {
+        const saved = response.result;
+        setResult({
+          isFace: saved.is_face,
+          seasonType: saved.season_type,
+          seasonDescription: saved.season_description,
+          undertone: saved.undertone,
+          undertoneDescription: saved.undertone_description,
+          colorsToWear: saved.colors_to_wear || [],
+          colorsToAvoid: saved.colors_to_avoid || [],
+          description: saved.description,
+        });
+        if (saved.colors_to_wear?.length) {
+          setSelectedColorFilter(saved.colors_to_wear[0].name);
+        }
+      } else {
+        setError('No saved color analysis found.');
+      }
+    } catch (error) {
+      console.error('Error loading saved result:', error);
+      setError('Could not load saved analysis.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const runAnalysis = async () => {
     if (!photoUri) return;
@@ -55,6 +92,9 @@ export default function ResultScreen() {
       if (analysis.isFace && analysis.colorsToWear?.length) {
         setSelectedColorFilter(analysis.colorsToWear[0].name);
       }
+      
+      // Save result to database
+      await saveResultToDatabase(analysis);
     } catch (err) {
       console.error('Color analysis error:', err);
       const msg = String(err?.message || '');
@@ -72,6 +112,27 @@ export default function ResultScreen() {
     }
   };
 
+  const saveResultToDatabase = async (analysis) => {
+    try {
+      const resultData = {
+        photo_uri: photoUri,
+        season_type: analysis.seasonType || null,
+        season_description: analysis.seasonDescription || null,
+        undertone: analysis.undertone || null,
+        undertone_description: analysis.undertoneDescription || null,
+        colors_to_wear: analysis.colorsToWear || [],
+        colors_to_avoid: analysis.colorsToAvoid || [],
+        is_face: analysis.isFace || false,
+        description: analysis.description || null,
+      };
+      
+      await quizAPI.saveColorAnalysisResult(resultData);
+    } catch (error) {
+      console.error('Error saving color analysis result:', error);
+      // Fail silently - don't interrupt user experience
+    }
+  };
+
   const handleShare = async () => {
     if (!result?.isFace) return;
     try {
@@ -83,10 +144,40 @@ export default function ResultScreen() {
   };
 
   const openWhatsApp = () => {
-    const text = result?.isFace
-      ? `My color analysis: ${result.seasonType}, ${result.undertone} undertone!`
-      : 'Check out my color analysis on MatchMyTone!';
-    Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`);
+    if (!result?.isFace) {
+      Linking.openURL(`https://wa.me/?text=${encodeURIComponent('Check out my color analysis on MatchMyTone!')}`);
+      return;
+    }
+
+    // Create comprehensive result message
+    let message = `🎨 *My Color Analysis - MatchMyTone*\n\n`;
+    message += `*Season Type:* ${result.seasonType || '—'}\n`;
+    if (result.seasonDescription) {
+      message += `${result.seasonDescription}\n\n`;
+    }
+    message += `*Undertone:* ${result.undertone || '—'}\n`;
+    if (result.undertoneDescription) {
+      message += `${result.undertoneDescription}\n\n`;
+    }
+    
+    if (result.colorsToWear && result.colorsToWear.length > 0) {
+      message += `*Colors to Wear:*\n`;
+      result.colorsToWear.forEach((c, i) => {
+        message += `${i + 1}. ${c.name}\n`;
+      });
+      message += `\n`;
+    }
+    
+    if (result.colorsToAvoid && result.colorsToAvoid.length > 0) {
+      message += `*Colors to Avoid:*\n`;
+      result.colorsToAvoid.forEach((c, i) => {
+        message += `${i + 1}. ${c.name}\n`;
+      });
+    }
+    
+    message += `\n✨ Discovered with MatchMyTone ✨`;
+    
+    Linking.openURL(`https://wa.me/?text=${encodeURIComponent(message)}`);
   };
 
   if (loading) {
@@ -166,18 +257,7 @@ export default function ResultScreen() {
             <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
               <Ionicons name="arrow-back" size={24} color="#2C2C2C" />
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>Color Analysis</Text>
-            <View style={styles.headerIcons}>
-              <TouchableOpacity style={styles.iconButton}>
-                <Ionicons name="flag-outline" size={22} color="#2C2C2C" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.iconButton} onPress={handleShare}>
-                <Ionicons name="share-outline" size={22} color="#2C2C2C" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.iconButton}>
-                <Ionicons name="close" size={24} color="#2C2C2C" />
-              </TouchableOpacity>
-            </View>
+            <View style={styles.headerIcons} />
           </View>
 
           {/* Title block: YOUR PERSONALISED / COLOR ANALYSIS */}
@@ -192,15 +272,17 @@ export default function ResultScreen() {
           </View>
 
           {/* Photo frame with sparkle-style corners */}
-          <View style={styles.photoFrameWrapper}>
-            <View style={styles.photoFrame}>
-              <Image source={{ uri: photoUri }} style={styles.photo} resizeMode="cover" />
-              <View style={[styles.frameCorner, styles.frameTopLeft]} />
-              <View style={[styles.frameCorner, styles.frameTopRight]} />
-              <View style={[styles.frameCorner, styles.frameBottomLeft]} />
-              <View style={[styles.frameCorner, styles.frameBottomRight]} />
+          {photoUri && (
+            <View style={styles.photoFrameWrapper}>
+              <View style={styles.photoFrame}>
+                <Image source={{ uri: photoUri }} style={styles.photo} resizeMode="cover" />
+                <View style={[styles.frameCorner, styles.frameTopLeft]} />
+                <View style={[styles.frameCorner, styles.frameTopRight]} />
+                <View style={[styles.frameCorner, styles.frameBottomLeft]} />
+                <View style={[styles.frameCorner, styles.frameBottomRight]} />
+              </View>
             </View>
-          </View>
+          )}
 
           {/* Season Type & Undertone cards */}
           <View style={styles.twoCardsRow}>
@@ -248,18 +330,11 @@ export default function ResultScreen() {
             </View>
           </View>
 
-          {/* Share buttons */}
+          {/* Share button */}
           <View style={styles.shareRow}>
             <TouchableOpacity style={styles.shareButtonWhite} onPress={openWhatsApp}>
               <Ionicons name="logo-whatsapp" size={24} color="#25D366" />
-              <Text style={styles.shareButtonTextDark}>WhatsApp</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.shareButtonWhite} onPress={handleShare}>
-              <Ionicons name="camera" size={24} color="#E4405F" />
-              <Text style={styles.shareButtonTextDark}>Stories</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.shareButtonBlack} onPress={handleShare}>
-              <Ionicons name="share-outline" size={24} color="#FFF" />
+              <Text style={styles.shareButtonTextDark}>Share on WhatsApp</Text>
             </TouchableOpacity>
           </View>
 
@@ -553,14 +628,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1.5,
     borderColor: 'rgba(184, 144, 24, 0.3)',
-  },
-  shareButtonBlack: {
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    backgroundColor: '#2C2C2C',
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   shareButtonTextDark: {
     fontSize: 14,

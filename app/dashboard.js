@@ -51,13 +51,14 @@ export default function DashboardScreen() {
           skincare: response.results.skincare?.result || null,
           body_shape: response.results.body_shape?.result || null,
           face_shape: response.results.face_shape?.result || null,
-          color_analysis: null // Color analysis not implemented yet
+          color_analysis: response.results.color_analysis?.season_type || null
         });
         // Store full data including answers for navigation
         setQuizData({
           skincare: response.results.skincare || null,
           body_shape: response.results.body_shape || null,
           face_shape: response.results.face_shape || null,
+          color_analysis: response.results.color_analysis || null,
         });
       }
     } catch (error) {
@@ -97,14 +98,31 @@ export default function DashboardScreen() {
         answers = quizData.face_shape?.answers || null;
         break;
       case 'color_analysis':
-        hasResult = false; // Not implemented yet
-        route = '';
+        hasResult = quizResults.color_analysis !== null;
+        route = '/ColorAnalysis/result';
+        // Pass the saved result data if available
         break;
     }
 
     if (!hasResult) {
-      setErrorMessages(prev => ({ ...prev, [quizType]: 'Take the quiz first' }));
+      setErrorMessages(prev => ({ ...prev, [quizType]: quizType === 'color_analysis' ? 'Take the analysis first' : 'Take the quiz first' }));
       return;
+    }
+
+    // Navigate to result screen
+    if (quizType === 'color_analysis') {
+      // For color analysis, navigate to result screen with saved data
+      const colorData = quizData.color_analysis;
+      if (colorData && colorData.photo_uri) {
+        router.push({
+          pathname: route,
+          params: { photoUri: colorData.photo_uri, fromDashboard: 'true' }
+        });
+        return;
+      } else {
+        router.push(route);
+        return;
+      }
     }
 
     // Navigate to result screen with answers
@@ -182,7 +200,9 @@ export default function DashboardScreen() {
                     <View style={styles.resultItem}>
                       <View style={styles.resultRow}>
                         <Text style={styles.resultLabel}>Color Analysis:</Text>
-                        <Text style={styles.resultValue}>-</Text>
+                        <Text style={styles.resultValue}>
+                          {loading ? 'Loading...' : (quizResults.color_analysis || '-')}
+                        </Text>
                       </View>
                       <TouchableOpacity 
                         style={styles.seeResultsButton}

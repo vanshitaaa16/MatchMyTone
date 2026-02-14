@@ -28,6 +28,28 @@ export default function EditProfileScreen() {
   const [dobError, setDobError] = useState('');
   const [ageError, setAgeError] = useState('');
 
+  // Helper function to calculate age from DOB
+  const calculateAgeFromDob = (dob) => {
+    if (!dob || dob.length !== 10) return '';
+    const m = dob.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (m) {
+      const dd = parseInt(m[1], 10);
+      const mm = parseInt(m[2], 10) - 1;
+      const yy = parseInt(m[3], 10);
+      const d = new Date(yy, mm, dd);
+      if (!isNaN(d.getTime()) && d.getFullYear() === yy && d.getMonth() === mm && d.getDate() === dd) {
+        const today = new Date();
+        let age = today.getFullYear() - yy;
+        const hasHadBirthday = (today.getMonth() > mm) || (today.getMonth() === mm && today.getDate() >= dd);
+        if (!hasHadBirthday) age -= 1;
+        if (age >= 0 && age <= 120) {
+          return String(age);
+        }
+      }
+    }
+    return '';
+  };
+
   useEffect(() => {
     fetchUserData();
   }, []);
@@ -45,22 +67,43 @@ export default function EditProfileScreen() {
           if (fullUserData) {
             setUserData(fullUserData);
             setEditName(fullUserData.name || '');
-            setEditGender(fullUserData.gender || '');
+            setEditGender(fullUserData.gender || ''); // Keep user's gender
             setEditPhone(fullUserData.phone || '');
             setEditEmail(fullUserData.email || '');
             setEditDob(fullUserData.dob || '');
-            setEditAge(fullUserData.age || '');
+            // Calculate age from DOB if age is missing
+            let ageToSet = fullUserData.age || '';
+            if (!ageToSet && fullUserData.dob) {
+              ageToSet = calculateAgeFromDob(fullUserData.dob);
+            }
+            setEditAge(ageToSet);
           } else {
             setUserData(user);
             setEditName(user.name || '');
+            setEditGender(user.gender || ''); // Keep user's gender
             setEditEmail(user.email || '');
             setEditPhone(user.phone || '');
+            setEditDob(user.dob || '');
+            // Calculate age from DOB if age is missing
+            let ageToSet = user.age || '';
+            if (!ageToSet && user.dob) {
+              ageToSet = calculateAgeFromDob(user.dob);
+            }
+            setEditAge(ageToSet);
           }
         } else {
           setUserData(user);
           setEditName(user.name || '');
+          setEditGender(user.gender || ''); // Keep user's gender
           setEditEmail(user.email || '');
           setEditPhone(user.phone || '');
+          setEditDob(user.dob || '');
+          // Calculate age from DOB if age is missing
+          let ageToSet = user.age || '';
+          if (!ageToSet && user.dob) {
+            ageToSet = calculateAgeFromDob(user.dob);
+          }
+          setEditAge(ageToSet); // Keep user's age
           setRegisteredUsers([]);
         }
       } else {
@@ -128,6 +171,25 @@ export default function EditProfileScreen() {
       setDobError('Date of birth is required');
       return;
     }
+    // Check if date is in the future
+    const m = dob.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (m) {
+      const dd = parseInt(m[1], 10);
+      const mm = parseInt(m[2], 10) - 1;
+      const yy = parseInt(m[3], 10);
+      const d = new Date(yy, mm, dd);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const dateToCheck = new Date(yy, mm, dd);
+      dateToCheck.setHours(0, 0, 0, 0);
+      
+      if (!isNaN(d.getTime()) && d.getFullYear() === yy && d.getMonth() === mm && d.getDate() === dd) {
+        if (dateToCheck > today) {
+          setDobError('Date of birth cannot be in the future');
+          return;
+        }
+      }
+    }
     setDobError('');
   };
 
@@ -159,8 +221,19 @@ export default function EditProfileScreen() {
         const mm = parseInt(m[2], 10) - 1;
         const yy = parseInt(m[3], 10);
         const d = new Date(yy, mm, dd);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const dateToCheck = new Date(yy, mm, dd);
+        dateToCheck.setHours(0, 0, 0, 0);
+        
         if (!isNaN(d.getTime()) && d.getFullYear() === yy && d.getMonth() === mm && d.getDate() === dd) {
-          const today = new Date();
+          // Check if date is in the future
+          if (dateToCheck > today) {
+            setDobError('Date of birth cannot be in the future');
+            setEditAge('');
+            return;
+          }
+          
           let age = today.getFullYear() - yy;
           const hasHadBirthday = (today.getMonth() > mm) || (today.getMonth() === mm && today.getDate() >= dd);
           if (!hasHadBirthday) age -= 1;
@@ -229,13 +302,48 @@ export default function EditProfileScreen() {
   const handleUpdateProfile = async () => {
     // Guard: should already be disabled via button, but keep for safety
     if (!editEmail || !editPhone || !editGender || !editDob) return;
-    if (phoneError || emailError) return;
+    if (phoneError || emailError || dobError || genderError) return;
     if (editPhone.length !== 10) {
       setPhoneError('Phone number must be exactly 10 digits');
       return;
     }
 
     try {
+      // Try to use API first if available
+      try {
+        const { profileAPI } = require('../src/api');
+        await profileAPI.updateProfile({
+          email: editEmail.trim(),
+          phone: editPhone,
+          gender: editGender,
+          dob: editDob,
+          age: editAge,
+        });
+        
+        // Update local storage
+        const currentUser = await AsyncStorage.getItem('currentUser');
+        if (currentUser) {
+          const user = JSON.parse(currentUser);
+          const updatedUser = {
+            ...user,
+            email: editEmail.trim(),
+            phone: editPhone,
+            gender: editGender,
+            dob: editDob,
+            age: editAge,
+          };
+          await AsyncStorage.setItem('currentUser', JSON.stringify(updatedUser));
+        }
+        
+        Alert.alert('Success', 'Profile updated successfully!', [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
+        return;
+      } catch (apiError) {
+        console.log('API update failed, trying AsyncStorage fallback:', apiError);
+      }
+
+      // Fallback to AsyncStorage method
       const registeredUsers = await AsyncStorage.getItem('registeredUsers');
 
       if (registeredUsers) {
@@ -246,45 +354,63 @@ export default function EditProfileScreen() {
           (u) => u.email === userData.email || u.name === userData.name
         );
 
-        if (userIndex === -1) {
-          Alert.alert('Error', 'Unable to find your profile. Please login again.');
+        if (userIndex !== -1) {
+          // User found in registeredUsers - update there
+          // Double-check duplicates before saving (in case data changed)
+          const phoneTaken = isPhoneDuplicate(editPhone);
+          const emailTaken = isEmailDuplicate(editEmail.trim());
+
+          if (phoneTaken || emailTaken) {
+            if (phoneTaken) setPhoneError('This phone number is already registered.');
+            if (emailTaken) setEmailError('This email address is already registered.');
+            return;
+          }
+
+          // No duplicates found → proceed to update this user's data
+          users[userIndex] = {
+            ...users[userIndex],
+            name: userData.name, // Keep original username
+            gender: editGender,
+            phone: editPhone,
+            email: editEmail.trim(),
+            dob: editDob,
+            age: editAge,
+          };
+
+          await AsyncStorage.setItem('registeredUsers', JSON.stringify(users));
+          setRegisteredUsers(users);
+
+          const updatedUser = users[userIndex];
+          await AsyncStorage.setItem('currentUser', JSON.stringify(updatedUser));
+
+          Alert.alert('Success', 'Profile updated successfully!', [
+            { text: 'OK', onPress: () => router.back() },
+          ]);
           return;
         }
+      }
 
-        // Double-check duplicates before saving (in case data changed)
-        // Note: username is not checked since it cannot be changed
-        const phoneTaken = isPhoneDuplicate(editPhone);
-        const emailTaken = isEmailDuplicate(editEmail.trim());
-
-        if (phoneTaken || emailTaken) {
-          if (phoneTaken) setPhoneError('This phone number is already registered.');
-          if (emailTaken) setEmailError('This email address is already registered.');
-          return;
-        }
-
-        // No duplicates found → proceed to update this user's data
-        // Keep original username - it cannot be changed
-        users[userIndex] = {
-          ...users[userIndex],
-          name: userData.name, // Keep original username
-          gender: editGender,
+      // If user not found in registeredUsers, just update currentUser
+      // This handles API-logged-in users who aren't in registeredUsers
+      const currentUser = await AsyncStorage.getItem('currentUser');
+      if (currentUser) {
+        const user = JSON.parse(currentUser);
+        const updatedUser = {
+          ...user,
+          email: editEmail.trim(),
           phone: editPhone,
-          email: editEmail,
+          gender: editGender,
           dob: editDob,
           age: editAge,
         };
-
-        await AsyncStorage.setItem('registeredUsers', JSON.stringify(users));
-        setRegisteredUsers(users);
-
-        const updatedUser = users[userIndex];
         await AsyncStorage.setItem('currentUser', JSON.stringify(updatedUser));
-
+        setUserData(updatedUser);
+        
         Alert.alert('Success', 'Profile updated successfully!', [
           { text: 'OK', onPress: () => router.back() },
         ]);
       } else {
-        Alert.alert('Error', 'No registered users found. Please sign up again.');
+        Alert.alert('Error', 'No user data found. Please login again.');
       }
     } catch (error) {
       console.error('Error updating profile:', error);

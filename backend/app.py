@@ -5,7 +5,7 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 from datetime import timedelta
 import os
 from dotenv import load_dotenv
-from models import db, User, QuizResult
+from models import db, User, QuizResult, ColorAnalysisResult
 from sqlalchemy.exc import IntegrityError
 
 load_dotenv()
@@ -38,7 +38,10 @@ with app.app_context():
 @app.route('/api/auth/register', methods=['POST'])
 def register():
     try:
+        print(f"[REGISTER] Received request from {request.remote_addr}")
+        print(f"[REGISTER] Headers: {dict(request.headers)}")
         data = request.get_json()
+        print(f"[REGISTER] Data: {data}")
         
         # Validate required fields
         required_fields = ['name', 'email', 'phone', 'password', 'gender', 'dob', 'age']
@@ -113,7 +116,10 @@ def register():
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     try:
+        print(f"[LOGIN] Received request from {request.remote_addr}")
+        print(f"[LOGIN] Headers: {dict(request.headers)}")
         data = request.get_json()
+        print(f"[LOGIN] Data: {data}")
         
         if not data.get('name') or not data.get('password'):
             return jsonify({'error': 'Username and password are required'}), 400
@@ -364,13 +370,62 @@ def get_quiz_results():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/quiz/color-analysis', methods=['POST'])
+@jwt_required()
+def save_color_analysis_result():
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # Allow both face and non-face results (is_face can be True or False)
+        if 'is_face' not in data:
+            return jsonify({'error': 'is_face field is required'}), 400
+        
+        # Check if result already exists for this user
+        existing_result = ColorAnalysisResult.query.filter_by(user_id=user_id).order_by(ColorAnalysisResult.created_at.desc()).first()
+        
+        if existing_result:
+            # Update existing result
+            existing_result.photo_uri = data.get('photo_uri', existing_result.photo_uri)
+            existing_result.season_type = data.get('season_type')
+            existing_result.season_description = data.get('season_description')
+            existing_result.undertone = data.get('undertone')
+            existing_result.undertone_description = data.get('undertone_description')
+            existing_result.colors_to_wear = data.get('colors_to_wear', [])
+            existing_result.colors_to_avoid = data.get('colors_to_avoid', [])
+            existing_result.is_face = data.get('is_face', True)
+            existing_result.description = data.get('description')
+            db.session.commit()
+            return jsonify({'message': 'Color analysis result updated successfully', 'result': existing_result.to_dict()}), 200
+        else:
+            # Create new result
+            new_result = ColorAnalysisResult(
+                user_id=user_id,
+                photo_uri=data.get('photo_uri'),
+                season_type=data.get('season_type'),
+                season_description=data.get('season_description'),
+                undertone=data.get('undertone'),
+                undertone_description=data.get('undertone_description'),
+                colors_to_wear=data.get('colors_to_wear', []),
+                colors_to_avoid=data.get('colors_to_avoid', []),
+                is_face=data.get('is_face', True),
+                description=data.get('description')
+            )
+            db.session.add(new_result)
+            db.session.commit()
+            return jsonify({'message': 'Color analysis result saved successfully', 'result': new_result.to_dict()}), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/quiz/<quiz_type>', methods=['GET'])
 @jwt_required()
 def get_quiz_result(quiz_type):
     try:
         user_id = get_jwt_identity()
         
-        valid_types = ['skincare', 'body_shape', 'face_shape']
+        valid_types = ['skincare', 'body_shape', 'face_shape', 'color_analysis']
         if quiz_type not in valid_types:
             return jsonify({'error': 'Invalid quiz type'}), 400
         

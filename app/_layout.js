@@ -6,6 +6,7 @@ import { useFonts,
   PlayfairDisplay_700Bold, 
   PlayfairDisplay_900Black } from '@expo-google-fonts/playfair-display';
 import { Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from '@expo-google-fonts/inter';
+import CustomSplashScreen from './_splash';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -27,7 +28,7 @@ export default function Layout() {
   }, [fontsLoaded, fontError]);
 
   if (!fontsLoaded && !fontError) {
-    return null;
+    return <CustomSplashScreen />;
   }
 
   return <Stack screenOptions={{ headerShown: false }} />;

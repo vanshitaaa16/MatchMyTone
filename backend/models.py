@@ -59,6 +59,43 @@ class QuizResult(db.Model):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
 
+class ColorAnalysisResult(db.Model):
+    __tablename__ = 'color_analysis_results'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    photo_uri = db.Column(db.String(500))  # Store photo URI/path
+    season_type = db.Column(db.String(100))
+    season_description = db.Column(db.Text)
+    undertone = db.Column(db.String(50))
+    undertone_description = db.Column(db.Text)
+    colors_to_wear = db.Column(db.JSON)  # Array of {name, hex}
+    colors_to_avoid = db.Column(db.JSON)  # Array of {name, hex}
+    is_face = db.Column(db.Boolean, default=True)
+    description = db.Column(db.Text)  # For non-face cases
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationship with user
+    user = db.relationship('User', backref='color_analysis_results')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'photo_uri': self.photo_uri,
+            'season_type': self.season_type,
+            'season_description': self.season_description,
+            'undertone': self.undertone,
+            'undertone_description': self.undertone_description,
+            'colors_to_wear': self.colors_to_wear,
+            'colors_to_avoid': self.colors_to_avoid,
+            'is_face': self.is_face,
+            'description': self.description,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
 
 
 

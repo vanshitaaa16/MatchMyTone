@@ -7,9 +7,12 @@ const getApiBaseUrl = () => {
   if (__DEV__) {
     // Development mode
     if (Platform.OS === 'android') {
-      // Android emulator uses special IP - update this to match your computer's IP address
-      // For physical device on same network, use your computer's IP
+      // Using your computer's actual IP address that backend is running on
+      // Backend shows: Running on http://192.168.25.205:5000
       return 'http://192.168.25.205:5000/api';
+      
+      // If above doesn't work, try Android emulator standard IP:
+      // return 'http://10.0.2.2:5000/api';
     } else if (Platform.OS === 'ios') {
       // iOS simulator can use localhost
       return 'http://localhost:5000/api';
@@ -66,7 +69,7 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
     
     // Create abort controller for timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
     
     const options = {
       method,
@@ -89,9 +92,26 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
     }
 
     console.log('Sending request...');
-    const response = await fetch(url, options);
-    clearTimeout(timeoutId); // Clear timeout if request completes
-    console.log(`Response status: ${response.status} ${response.statusText}`);
+    console.log('Request URL:', url);
+    
+    let response;
+    try {
+      response = await Promise.race([
+        fetch(url, options),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Request timeout after 10 seconds')), 10000)
+        )
+      ]);
+      clearTimeout(timeoutId); // Clear timeout if request completes
+      console.log(`Response status: ${response.status} ${response.statusText}`);
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      console.error('Fetch error:', fetchError);
+      if (fetchError.message.includes('timeout')) {
+        throw new Error('Request timed out. Backend is not responding. Check: 1) Backend running? 2) Correct IP? 3) Firewall allows port 5000?');
+      }
+      throw fetchError;
+    }
     
     // Handle non-JSON responses
     let result;
@@ -332,6 +352,16 @@ export const quizAPI = {
   getQuizResult: async (quizType) => {
     try {
       const response = await makeRequest(`/quiz/${quizType}`, 'GET');
+      return response;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Save color analysis result
+  saveColorAnalysisResult: async (resultData) => {
+    try {
+      const response = await makeRequest('/quiz/color-analysis', 'POST', resultData);
       return response;
     } catch (error) {
       throw error;
