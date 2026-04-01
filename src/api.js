@@ -22,7 +22,7 @@ const getApiBaseUrl = () => {
     }
   } else {
     // Production mode
-    return 'https://your-production-url.com/api';  // Update this with your production URL
+    return 'https://matchmytone.onrender.com/api';  // Update this with your production URL
   }
 };
 

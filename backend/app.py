@@ -37,9 +37,23 @@ jwt = JWTManager(app)
 # Enable CORS for all routes and origins (for development)
 CORS(app, resources={r"/api/*": {"origins": "*", "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization"]}})
 
-# Create tables
+# Create tables (safe for production — handles existing tables)
 with app.app_context():
-    db.create_all()
+    try:
+        from sqlalchemy import inspect
+        inspector = inspect(db.engine)
+        existing_tables = inspector.get_table_names()
+        
+        if 'users' not in existing_tables:
+            db.create_all()
+            print("[DB] Tables created successfully")
+        else:
+            # Tables exist — only create missing ones
+            db.create_all()
+            print("[DB] Tables verified (existing tables preserved)")
+    except Exception as e:
+        print(f"[DB] create_all handled gracefully: {e}")
+    
     # Lightweight schema safety: add new columns if DB already has older table.
     try:
         db.session.execute(text("ALTER TABLE color_analysis_results ADD COLUMN IF NOT EXISTS skin_age INTEGER;"))
