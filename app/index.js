@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, Pressable, TextInput, ScrollView, Image, Animated, Dimensions, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, Pressable, TextInput, ScrollView, Image, Animated, Dimensions, Platform, Alert } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -22,7 +22,7 @@ export default function MainScreen() {
 
   // Sticker animations - left to right with wave motion
   // Create animated values for all 16 stickers
-  const stickerAnimations = useMemo(() => 
+  const stickerAnimations = useMemo(() =>
     Array.from({ length: 16 }, () => ({
       x: new Animated.Value(-100), // Start off-screen left
       wave: new Animated.Value(0), // Wave motion
@@ -49,14 +49,14 @@ export default function MainScreen() {
       { source: require('../assets/15.jpg'), sizeOffset: 35 }, // Bigger
       { source: require('../assets/16.jpg'), sizeOffset: 35 }, // Bigger
     ];
-    
+
     // Shuffle array randomly
     const shuffled = [...allImages];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
-    
+
     return shuffled;
   }, []);
 
@@ -67,28 +67,28 @@ export default function MainScreen() {
     const initialX = -500; // Start well off-screen left
     const maxImageSize = 135; // Maximum image size (100 + 35 offset)
     const safeSpacing = maxImageSize + 50; // Safe spacing between images to prevent overlap
-    
+
     // Calculate Y positions to utilize all space without overlap
     const buttonBottom = 110;
     const textTop = 190;
     const textBottom = 260;
     const screenBottom = height - 100;
-    
+
     // Calculate spacing to ensure no vertical overlap
     const aboveSpace = textTop - buttonBottom;
     const aboveSpacing = Math.max(aboveSpace / 8, maxImageSize + 20); // Ensure minimum spacing
-    
+
     const belowSpace = screenBottom - textBottom;
     const belowSpacing = Math.max(belowSpace / 8, maxImageSize + 20); // Ensure minimum spacing
-    
+
     // Separate images into above and below groups
     const aboveGroup = [];
     const belowGroup = [];
-    
+
     stickerAnimations.forEach((anim, idx) => {
       const stickerData = allStickers[idx];
       const imageSize = 100 + (stickerData?.sizeOffset || 0);
-      
+
       if (idx < 8) {
         // Above text group
         const yPos = buttonBottom + 10 + (idx * aboveSpacing);
@@ -100,7 +100,7 @@ export default function MainScreen() {
         belowGroup.push({ anim, idx, yPos, imageSize, delay: belowIdx * (crossScreenDuration / 8) });
       }
     });
-    
+
     const animateImage = (anim, yPos, delay, idx) => {
       // Reset position
       anim.x.setValue(initialX);
@@ -142,7 +142,7 @@ export default function MainScreen() {
           runAnimation();
         });
       };
-      
+
       runAnimation();
     };
 
@@ -150,7 +150,7 @@ export default function MainScreen() {
     aboveGroup.forEach(({ anim, idx, yPos, delay }) => {
       animateImage(anim, yPos, delay, idx);
     });
-    
+
     // Animate below group - each image enters when previous is far enough
     belowGroup.forEach(({ anim, idx, yPos, delay }) => {
       animateImage(anim, yPos, delay, idx);
@@ -180,7 +180,7 @@ export default function MainScreen() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
-  
+
   // forgot password state
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotNewPassword, setForgotNewPassword] = useState('');
@@ -223,7 +223,7 @@ export default function MainScreen() {
       setRError('Passwords do not match');
       return;
     }
-    
+
     try {
       console.log('Attempting registration...');
       const response = await authAPI.register({
@@ -235,67 +235,51 @@ export default function MainScreen() {
         dob: rDob,
         age: rAge
       });
-      
+
       console.log('Registration response received:', JSON.stringify(response, null, 2));
-      
-      // Check if registration was successful - be more flexible with response structure
+
       if (response) {
-        const user = response.user || response;
-        const token = user?.token || response.token;
-        
-        if (token || user) {
-          console.log('Registration successful, showing login modal...');
-          // Clear form
-          setRName(''); setRNameError(''); setRGender(''); setRPhone(''); setRPhoneError(''); 
-          setREmail(''); setREmailError(''); setRDob(''); setRAge(''); 
-          setRPassword(''); setRConfirm(''); setRError('');
-          // Close register modal and show login modal
-          setShowRegister(false);
-          setShowLogin(true);
-          console.log('Register modal closed, login modal opened');
-        } else {
-          console.warn('Registration response missing token/user:', response);
-          // Still show login modal even if token is missing
-          setRName(''); setRNameError(''); setRGender(''); setRPhone(''); setRPhoneError(''); 
-          setREmail(''); setREmailError(''); setRDob(''); setRAge(''); 
-          setRPassword(''); setRConfirm(''); setRError('');
-          setShowRegister(false);
-          setShowLogin(true);
-          console.log('Register modal closed, login modal opened (no token)');
-        }
-      } else {
-        console.warn('Empty registration response');
-        setRError('Registration completed. Please login.');
+        console.log('Registration successful, showing verification message...');
+        // Clear form
+        setRName(''); setRNameError(''); setRGender(''); setRPhone(''); setRPhoneError('');
+        setREmail(''); setREmailError(''); setRDob(''); setRAge('');
+        setRPassword(''); setRConfirm(''); setRError('');
+        // Close register modal
         setShowRegister(false);
-        setShowLogin(true);
+
+        // Show verification message
+        Alert.alert(
+          'Check your email ✉️',
+          response.message || 'We sent a verification link to your email. Please click it to verify your account, then log in.',
+          [{ text: 'OK', onPress: () => setShowLogin(true) }]
+        );
       }
     } catch (error) {
-      console.error('Registration error:', error);
-      console.error('Error details:', error.message, error.stack);
+      console.warn('Registration error:', error?.message || error);
       setRError(error.message || 'Registration failed. Please try again.');
     }
   };
 
   const onLogin = async () => {
     if (isLoggingIn) return; // Prevent double submission
-    
+
     setLError('');
     if (!lName || !lPassword) {
       setLError('Please enter username and password');
-        return;
-      }
-    
+      return;
+    }
+
     setIsLoggingIn(true);
     try {
       console.log('Attempting login...');
       const response = await authAPI.login(lName, lPassword);
       console.log('Login response received:', JSON.stringify(response, null, 2));
-      
+
       // Check if login was successful - be more flexible with response structure
       if (response) {
         const user = response.user || response;
         const token = user?.token || response.token;
-        
+
         if (token || user) {
           console.log('Login successful, token stored, navigating to home...');
           // Clear form
@@ -306,7 +290,7 @@ export default function MainScreen() {
           setIsLoggingIn(false);
           setShowLogin(false);
           console.log('Login modal closed, navigating to home...');
-          
+
           // Verify token was stored before navigating
           const storedToken = await AsyncStorage.getItem('authToken');
           if (storedToken) {
@@ -314,7 +298,7 @@ export default function MainScreen() {
           } else {
             console.warn('Token not found in storage, but proceeding with navigation');
           }
-          
+
           // Small delay to ensure modal is closed before navigation
           setTimeout(() => {
             try {
@@ -343,45 +327,66 @@ export default function MainScreen() {
         setLError('Login failed. Please check your credentials and try again.');
       }
     } catch (error) {
-      // Only log unexpected errors, not expected authentication failures
-      if (!error.message || (!error.message.includes('Invalid credentials') && !error.message.includes('credentials'))) {
-        console.log('Login error:', error.message);
-      }
       setIsLoggingIn(false);
-      setLError(error.message || 'Invalid credentials. Please check your username and password.');
+      const msg = error.message || 'Invalid credentials. Please check your username and password.';
+
+      // If the error is about email verification, offer to resend the link
+      if (msg.toLowerCase().includes('verify your email')) {
+        Alert.alert(
+          'Email Not Verified',
+          'Please verify your email before logging in. Check your inbox for the verification link.',
+          [
+            { text: 'OK', style: 'cancel' },
+            {
+              text: 'Resend Link', onPress: async () => {
+                try {
+                  // We need the email — ask user or try to get from response
+                  const emailToResend = lName; // username might not be email, but try
+                  await authAPI.resendVerification(emailToResend);
+                  Alert.alert('Sent!', 'A new verification link has been sent to your email.');
+                } catch (resendErr) {
+                  Alert.alert('Error', resendErr.message || 'Could not resend verification email.');
+                }
+              }
+            }
+          ]
+        );
+      } else {
+        setLError(msg);
+      }
     }
   };
 
   const onResetPassword = async () => {
     setForgotError('');
     setForgotSuccess('');
-    
+
     if (!forgotEmail || !forgotNewPassword) {
       setForgotError('Please fill all fields');
       return;
     }
-    
+
     try {
       const saved = await AsyncStorage.getItem('registeredUsers');
       if (!saved) {
         setForgotError('No registered user found. Please register first.');
         return;
       }
-      
+
       const users = JSON.parse(saved);
       const userIndex = users.findIndex((u) => u.email.toLowerCase() === forgotEmail.toLowerCase());
-      
+
       if (userIndex === -1) {
         setForgotError('Email not found. Please check your email address.');
         return;
       }
-      
+
       // Update the password
       users[userIndex].password = forgotNewPassword;
       await AsyncStorage.setItem('registeredUsers', JSON.stringify(users));
-      
+
       setForgotSuccess('Password reset successfully! You can now login with your new password.');
-      
+
       // Clear fields after a delay
       setTimeout(() => {
         setForgotEmail('');
@@ -430,7 +435,7 @@ export default function MainScreen() {
   };
 
   return (
-    <LinearGradient colors={[ '#fffaf3', '#fbeed9' ]} style={styles.bg}>
+    <LinearGradient colors={['#fffaf3', '#fbeed9']} style={styles.bg}>
       {/* Soft Grid Pattern */}
       <View style={styles.gridOverlay} pointerEvents="none">
         {Array.from({ length: Math.ceil(height / 40) }).map((_, i) => (
@@ -453,7 +458,7 @@ export default function MainScreen() {
               <Text style={styles.authText}>LOGIN</Text>
             </TouchableOpacity>
           </Animated.View>
-          </View>
+        </View>
 
         {/* Main Heading - Centered */}
         <View style={styles.centerContainer}>
@@ -470,20 +475,20 @@ export default function MainScreen() {
           let startY;
           const floatRange = 30; // Reduced floating range to prevent overlap
           const maxImageSize = 135; // Maximum image size
-          
+
           // Calculate Y positions - MUST MATCH useEffect calculations
           const buttonBottom = 110;
           const textTop = 190;
           const textBottom = 260;
           const screenBottom = height - 100;
-          
+
           // Same calculation as in useEffect
           const aboveSpace = textTop - buttonBottom;
           const aboveSpacing = Math.max(aboveSpace / 8, maxImageSize + 20);
-          
+
           const belowSpace = screenBottom - textBottom;
           const belowSpacing = Math.max(belowSpace / 8, maxImageSize + 20);
-          
+
           if (idx < 8) {
             // First 8 images: above text - MUST stay above text
             startY = buttonBottom + 10 + (idx * aboveSpacing);
@@ -496,7 +501,7 @@ export default function MainScreen() {
             const belowIdx = idx - 8;
             startY = textBottom + 20 + (belowIdx * belowSpacing);
           }
-          
+
           const stickerSize = 100 + sizeOffset;
           return (
             <Animated.Image
@@ -542,7 +547,7 @@ export default function MainScreen() {
                   onChangeText={async (text) => {
                     setRName(text);
                     setRNameError('');
-                    
+
                     // Check if username already exists
                     if (text.trim().length > 0) {
                       try {
@@ -640,7 +645,7 @@ export default function MainScreen() {
                     onChangeText={(text) => {
                       // Remove all non-digits
                       const digits = text.replace(/\D/g, '');
-                      
+
                       // Format as DD-MM-YYYY
                       let formatted = '';
                       if (digits.length > 0) {
@@ -652,10 +657,10 @@ export default function MainScreen() {
                           formatted += '-' + digits.substring(4, 8);
                         }
                       }
-                      
+
                       setRDob(formatted);
                       setRDobError(''); // Clear error when typing
-                      
+
                       // Calculate age when we have complete date (DD-MM-YYYY = 10 chars)
                       if (formatted.length === 10) {
                         const m = formatted.match(/^(\d{2})-(\d{2})-(\d{4})$/);
@@ -668,7 +673,7 @@ export default function MainScreen() {
                           today.setHours(0, 0, 0, 0);
                           const dateToCheck = new Date(yy, mm, dd);
                           dateToCheck.setHours(0, 0, 0, 0);
-                          
+
                           if (!isNaN(d.getTime()) && d.getFullYear() === yy && d.getMonth() === mm && d.getDate() === dd) {
                             // Check if date is in the future
                             if (dateToCheck > today) {
@@ -676,12 +681,12 @@ export default function MainScreen() {
                               setRAge('');
                               return;
                             }
-                            
+
                             // Calculate age
                             let age = today.getFullYear() - yy;
                             const hasHadBirthday = (today.getMonth() > mm) || (today.getMonth() === mm && today.getDate() >= dd);
                             if (!hasHadBirthday) age -= 1;
-                            
+
                             if (age >= 0 && age <= 120) {
                               setRAge(String(age));
                               setRDobError('');
@@ -702,7 +707,7 @@ export default function MainScreen() {
                     placeholder="DD-MM-YYYY"
                     placeholderTextColor="#888"
                     maxLength={10}
-            />
+                  />
                   <TouchableOpacity
                     style={styles.calendarBtn}
                     onPress={() => {
@@ -744,7 +749,7 @@ export default function MainScreen() {
                         today.setHours(0, 0, 0, 0);
                         const selectedDateCheck = new Date(selectedDate);
                         selectedDateCheck.setHours(0, 0, 0, 0);
-                        
+
                         // Check if date is in the future
                         if (selectedDateCheck > today) {
                           setRDobError('Date of birth cannot be in the future');
@@ -754,7 +759,7 @@ export default function MainScreen() {
                           }
                           return;
                         }
-                        
+
                         setPickerDate(selectedDate);
                         const dd = String(selectedDate.getDate()).padStart(2, '0');
                         const mm = String(selectedDate.getMonth() + 1).padStart(2, '0');
@@ -762,18 +767,18 @@ export default function MainScreen() {
                         const formatted = `${dd}-${mm}-${yy}`;
                         setRDob(formatted);
                         setRDobError('');
-                        
+
                         let age = today.getFullYear() - yy;
                         const hasHadBirthday = (today.getMonth() > selectedDate.getMonth()) || (today.getMonth() === selectedDate.getMonth() && today.getDate() >= selectedDate.getDate());
                         if (!hasHadBirthday) age -= 1;
-                        
+
                         if (age >= 0 && age <= 120) {
                           setRAge(String(age));
                         } else {
                           setRDobError('Please enter a valid date of birth');
                           setRAge('');
                         }
-                        
+
                         if (Platform.OS === 'ios') {
                           setDobOpen(false);
                         }
@@ -797,24 +802,24 @@ export default function MainScreen() {
                   editable={false}
                   placeholder="Enter Age"
                   placeholderTextColor="#888"
-            />
-          </View>
+                />
+              </View>
               <View style={styles.formGroup}>
                 <Text style={styles.label}>Password</Text>
                 <View style={styles.passwordContainer}>
-                  <TextInput 
-                    style={[styles.input, styles.passwordInput]} 
-                    secureTextEntry={!showPassword} 
-                    value={rPassword} 
-                    onChangeText={setRPassword} 
-                    placeholder="********" 
-                    placeholderTextColor="#888" 
+                  <TextInput
+                    style={[styles.input, styles.passwordInput]}
+                    secureTextEntry={!showPassword}
+                    value={rPassword}
+                    onChangeText={setRPassword}
+                    placeholder="********"
+                    placeholderTextColor="#888"
                   />
                   <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
                     <Text style={styles.eyeIconText}>{showPassword ? '👁️' : '👁️‍🗨️'}</Text>
                   </TouchableOpacity>
                 </View>
-                <View style={styles.strengthBar}><View style={[styles.strengthFill, { width: `${(strength/5)*100}%` }]} /></View>
+                <View style={styles.strengthBar}><View style={[styles.strengthFill, { width: `${(strength / 5) * 100}%` }]} /></View>
                 <Text style={styles.strengthText}>Password strength</Text>
                 <View style={styles.reqList}>
                   <Text style={[styles.req, rPassword.length >= 8 && styles.reqMet]}>• At least 8 characters</Text>
@@ -827,13 +832,13 @@ export default function MainScreen() {
               <View style={styles.formGroup}>
                 <Text style={styles.label}>Confirm Password</Text>
                 <View style={styles.passwordContainer}>
-                  <TextInput 
-                    style={[styles.input, styles.passwordInput]} 
-                    secureTextEntry={!showConfirmPassword} 
-                    value={rConfirm} 
-                    onChangeText={setRConfirm} 
-                    placeholder="Confirm password" 
-                    placeholderTextColor="#888" 
+                  <TextInput
+                    style={[styles.input, styles.passwordInput]}
+                    secureTextEntry={!showConfirmPassword}
+                    value={rConfirm}
+                    onChangeText={setRConfirm}
+                    placeholder="Confirm password"
+                    placeholderTextColor="#888"
                   />
                   <TouchableOpacity onPress={() => setShowConfirmPassword(!showConfirmPassword)} style={styles.eyeIcon}>
                     <Text style={styles.eyeIconText}>{showConfirmPassword ? '👁️' : '👁️‍🗨️'}</Text>
@@ -842,8 +847,8 @@ export default function MainScreen() {
               </View>
               {!!rError && <Text style={styles.error}>{rError}</Text>}
               <View style={styles.actionsRow}>
-                <TouchableOpacity 
-                  style={[styles.btn, styles.primary]} 
+                <TouchableOpacity
+                  style={[styles.btn, styles.primary]}
                   onPress={onRegister}
                   activeOpacity={0.8}
                 >
@@ -859,7 +864,7 @@ export default function MainScreen() {
                 </TouchableOpacity>
               </View>
               <Text style={styles.footerNote}>Already have an account? <Text onPress={() => { setShowRegister(false); setShowLogin(true); }} style={styles.link}>Login</Text></Text>
-        </ScrollView>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -877,13 +882,13 @@ export default function MainScreen() {
             <View style={styles.formGroup}>
               <Text style={styles.label}>Password</Text>
               <View style={styles.passwordContainer}>
-                <TextInput 
-                  style={[styles.input, styles.passwordInput]} 
-                  secureTextEntry={!showLoginPassword} 
-                  value={lPassword} 
-                  onChangeText={setLPassword} 
-                  placeholder="Enter your password" 
-                  placeholderTextColor="#888" 
+                <TextInput
+                  style={[styles.input, styles.passwordInput]}
+                  secureTextEntry={!showLoginPassword}
+                  value={lPassword}
+                  onChangeText={setLPassword}
+                  placeholder="Enter your password"
+                  placeholderTextColor="#888"
                 />
                 <TouchableOpacity onPress={() => setShowLoginPassword(!showLoginPassword)} style={styles.eyeIcon}>
                   <Text style={styles.eyeIconText}>{showLoginPassword ? '👁️' : '👁️‍🗨️'}</Text>
@@ -891,8 +896,8 @@ export default function MainScreen() {
               </View>
             </View>
             {!!lError && <Text style={styles.error}>{lError}</Text>}
-            <TouchableOpacity 
-              style={[styles.btn, styles.primary, styles.loginButton, isLoggingIn && { opacity: 0.7 }]} 
+            <TouchableOpacity
+              style={[styles.btn, styles.primary, styles.loginButton, isLoggingIn && { opacity: 0.7 }]}
               onPress={onLogin}
               activeOpacity={0.8}
               disabled={isLoggingIn}
@@ -916,10 +921,10 @@ export default function MainScreen() {
             </View>
             <View style={styles.formGroup}>
               <Text style={styles.label}>Email Address</Text>
-              <TextInput 
-                style={styles.input} 
-                keyboardType="email-address" 
-                placeholder="Enter your email address" 
+              <TextInput
+                style={styles.input}
+                keyboardType="email-address"
+                placeholder="Enter your email address"
                 placeholderTextColor="#888"
                 value={forgotEmail}
                 onChangeText={setForgotEmail}
@@ -928,10 +933,10 @@ export default function MainScreen() {
             <View style={styles.formGroup}>
               <Text style={styles.label}>New Password</Text>
               <View style={styles.passwordContainer}>
-                <TextInput 
-                  style={[styles.input, styles.passwordInput]} 
-                  secureTextEntry={!showForgotPasswordField} 
-                  placeholder="New password" 
+                <TextInput
+                  style={[styles.input, styles.passwordInput]}
+                  secureTextEntry={!showForgotPasswordField}
+                  placeholder="New password"
                   placeholderTextColor="#888"
                   value={forgotNewPassword}
                   onChangeText={setForgotNewPassword}
@@ -947,9 +952,9 @@ export default function MainScreen() {
               <Text style={[styles.btnText, styles.primaryText]}>Reset Password</Text>
             </TouchableOpacity>
             <Text style={styles.footerNote}><Text onPress={() => { setShowForgot(false); setForgotEmail(''); setForgotNewPassword(''); setForgotError(''); setForgotSuccess(''); setShowLogin(true); }} style={styles.link}>Back to Login</Text></Text>
-            </View>
+          </View>
         </View>
-        </Modal>
+      </Modal>
     </LinearGradient>
   );
 }

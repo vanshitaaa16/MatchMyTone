@@ -1,7 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { quizAPI } from "../../../src/api";
 import { useRouter } from "expo-router";
-import { TouchableOpacity } from "react-native";
+import {
+  TouchableOpacity,
+  Linking,
+  Alert,
+} from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
 import { Ionicons } from "@expo/vector-icons";
 
 // Using placeholder images from assets
@@ -212,6 +219,9 @@ export default function ResultScreen() {
   const answersParam = params.answers;
   const answers = answersParam ? (typeof answersParam === 'string' ? JSON.parse(answersParam) : answersParam) : {};
   const [result, setResult] = useState(null);
+  const [userEmail, setUserEmail] = useState("");
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const viewOnly = params?.viewOnly === "true";
 
   useEffect(() => {
     if (!answersParam) return;
@@ -238,8 +248,8 @@ export default function ResultScreen() {
   // Save result to API
   useEffect(() => {
     const saveResult = async () => {
-      if (!result || !answersParam) return;
-      
+      if (!result || !answersParam || viewOnly) return;
+
       try {
         const parsedAnswers = typeof answersParam === 'string' ? JSON.parse(answersParam) : answersParam;
         await quizAPI.saveFaceShapeResult(parsedAnswers, result);
@@ -253,6 +263,170 @@ export default function ResultScreen() {
       saveResult();
     }
   }, [result, answersParam]);
+
+  useEffect(() => {
+    const loadUserEmail = async () => {
+      try {
+        const storedUser = await AsyncStorage.getItem("currentUser");
+        if (storedUser) {
+          const parsed = JSON.parse(storedUser);
+          if (parsed?.email) {
+            setUserEmail(parsed.email);
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+    loadUserEmail();
+  }, []);
+
+  const handleShareEmail = () => {
+    if (!result) return;
+    const shape = SHAPE_DATA[result];
+    if (!shape) return;
+
+    const celeb = CELEB_DATA[result];
+    const subject = `My Face Shape Analysis - ${result}`;
+    let body = "";
+
+    body += `Face Shape: ${result}\n`;
+    body += `${shape.description}\n\n`;
+
+    if (celeb) {
+      body += `Celebrity Match: ${celeb.name}\n`;
+      if (celeb.tag) {
+        body += `Why: ${celeb.tag}\n`;
+      }
+      body += "\n";
+    }
+
+    if (shape.recommendations?.length) {
+      body += "Recommendations:\n";
+      shape.recommendations.forEach((rec, i) => {
+        body += `${i + 1}. ${rec.title} - ${rec.desc}\n`;
+      });
+      body += "\n";
+    }
+
+    if (shape.browseLooks?.length) {
+      body += "Browse Looks:\n";
+      shape.browseLooks.forEach((look, i) => {
+        body += `${i + 1}. ${look.title}\n`;
+      });
+      body += "\n";
+    }
+
+    body += "\nDiscovered with MatchMyTone";
+
+    const to = userEmail ? encodeURIComponent(userEmail) : "";
+    const mailtoUrl = `mailto:${to}?subject=${encodeURIComponent(
+      subject
+    )}&body=${encodeURIComponent(body)}`;
+
+    Linking.openURL(mailtoUrl);
+  };
+
+  const handleDownloadPdfInternal = async () => {
+    if (!result) return;
+    const shape = SHAPE_DATA[result];
+    if (!shape) return;
+
+    const celeb = CELEB_DATA[result];
+
+    try {
+      const recHtml = (shape.recommendations || [])
+        .map(
+          (rec, i) => `${i + 1}. <strong>${rec.title}</strong> - ${rec.desc}`
+        )
+        .join("<br/>");
+
+      const looksHtml = (shape.browseLooks || [])
+        .map((look, i) => `${i + 1}. ${look.title}`)
+        .join("<br/>");
+
+      const celebHtml = celeb
+        ? `<p><strong>${celeb.name}</strong> - ${celeb.tag || ""}</p>`
+        : "";
+
+      const html = `
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 24px; color: #2C2C2C; }
+            h1 { font-size: 22px; margin-bottom: 4px; }
+            h2 { font-size: 18px; margin-top: 18px; margin-bottom: 4px; }
+            p { font-size: 14px; line-height: 1.5; margin: 2px 0; }
+            .section { margin-bottom: 12px; }
+          </style>
+        </head>
+        <body>
+          <h1>Face Shape Analysis Result</h1>
+          <div class="section">
+            <h2>Face Shape</h2>
+            <p><strong>${result}</strong></p>
+            <p>${shape.description}</p>
+          </div>
+          <div class="section">
+            <h2>Celebrity Match</h2>
+            ${celebHtml || "<p>—</p>"}
+          </div>
+          <div class="section">
+            <h2>Recommendations</h2>
+            <p>${recHtml || "—"}</p>
+          </div>
+          <div class="section">
+            <h2>Browse Looks</h2>
+            <p>${looksHtml || "—"}</p>
+          </div>
+          <p style="margin-top:24px;">Discovered with MatchMyTone</p>
+        </body>
+      </html>
+      `;
+
+      const { uri } = await Print.printToFileAsync({ html });
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: "application/pdf",
+          dialogTitle: "Share Face Shape Analysis PDF",
+        });
+      } else {
+        Alert.alert("PDF created", `PDF file saved at:\n${uri}`);
+      }
+    } catch (e) {
+      Alert.alert("Error", "Could not generate PDF. Please try again.");
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!result || downloadingPdf) return;
+
+    try {
+      const flag = await AsyncStorage.getItem("faceShapePdfDownloaded");
+      if (flag === "true") {
+        Alert.alert(
+          "PDF already downloaded",
+          "You have already downloaded this face shape analysis PDF. Do you want to download it again?",
+          [
+            { text: "No", style: "cancel" },
+            { text: "Yes", onPress: () => { handleDownloadPdfInternal(); } },
+          ]
+        );
+        return;
+      }
+
+      setDownloadingPdf(true);
+      await handleDownloadPdfInternal();
+      await AsyncStorage.setItem("faceShapePdfDownloaded", "true");
+    } catch (e) {
+      setDownloadingPdf(false);
+      Alert.alert("Error", "Could not generate PDF. Please try again.");
+    }
+  };
 
   if (!result) return <Text>Loading...</Text>;
   const shape = SHAPE_DATA[result];
@@ -335,6 +509,20 @@ export default function ResultScreen() {
               <Text style={styles.lookTitle}>{look.title}</Text>
             </View>
           ))}
+        </View>
+
+        {/* Share / Download */}
+        <View style={styles.shareRow}>
+          <TouchableOpacity style={styles.shareButtonWhite} onPress={handleShareEmail}>
+            <Ionicons name="mail-outline" size={24} color="#2C2C2C" />
+            <Text style={styles.shareButtonTextDark}>Share on Email</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.shareButtonWhite} onPress={handleDownloadPdf}>
+            <Ionicons name="download-outline" size={24} color="#2C2C2C" />
+            <Text style={styles.shareButtonTextDark}>
+              {downloadingPdf ? "Downloading…" : "Download PDF"}
+            </Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -481,6 +669,30 @@ const styles = StyleSheet.create({
   lookTitle: {
     textAlign: "center",
     paddingVertical: 6,
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#2C2C2C",
+  },
+  shareRow: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    gap: 10,
+    marginTop: 16,
+    marginBottom: 24,
+  },
+  shareButtonWhite: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#FFF",
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "rgba(184, 144, 24, 0.3)",
+  },
+  shareButtonTextDark: {
     fontSize: 14,
     fontWeight: "600",
     color: "#2C2C2C",

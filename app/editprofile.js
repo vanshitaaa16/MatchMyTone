@@ -12,7 +12,7 @@ export default function EditProfileScreen() {
   const [userData, setUserData] = useState(null);
   const [registeredUsers, setRegisteredUsers] = useState([]);
   const [loading, setLoading] = useState(true);
-  
+
   // Form state
   const [editName, setEditName] = useState('');
   const [editGender, setEditGender] = useState('');
@@ -20,7 +20,7 @@ export default function EditProfileScreen() {
   const [editEmail, setEditEmail] = useState('');
   const [editDob, setEditDob] = useState('');
   const [editAge, setEditAge] = useState('');
-  
+
   // Error states (username validation removed since it cannot be changed)
   const [phoneError, setPhoneError] = useState('');
   const [emailError, setEmailError] = useState('');
@@ -182,7 +182,7 @@ export default function EditProfileScreen() {
       today.setHours(0, 0, 0, 0);
       const dateToCheck = new Date(yy, mm, dd);
       dateToCheck.setHours(0, 0, 0, 0);
-      
+
       if (!isNaN(d.getTime()) && d.getFullYear() === yy && d.getMonth() === mm && d.getDate() === dd) {
         if (dateToCheck > today) {
           setDobError('Date of birth cannot be in the future');
@@ -196,7 +196,7 @@ export default function EditProfileScreen() {
   const handleDobChange = (text) => {
     // Remove all non-digits
     const digits = text.replace(/\D/g, '');
-    
+
     // Format as DD-MM-YYYY
     let formatted = '';
     if (digits.length > 0) {
@@ -208,11 +208,11 @@ export default function EditProfileScreen() {
         formatted += '-' + digits.substring(4, 8);
       }
     }
-    
+
     setEditDob(formatted);
     // Validate immediately
     validateDob(formatted);
-    
+
     // Calculate age when we have complete date (DD-MM-YYYY = 10 chars)
     if (formatted.length === 10) {
       const m = formatted.match(/^(\d{2})-(\d{2})-(\d{4})$/);
@@ -225,7 +225,7 @@ export default function EditProfileScreen() {
         today.setHours(0, 0, 0, 0);
         const dateToCheck = new Date(yy, mm, dd);
         dateToCheck.setHours(0, 0, 0, 0);
-        
+
         if (!isNaN(d.getTime()) && d.getFullYear() === yy && d.getMonth() === mm && d.getDate() === dd) {
           // Check if date is in the future
           if (dateToCheck > today) {
@@ -233,7 +233,7 @@ export default function EditProfileScreen() {
             setEditAge('');
             return;
           }
-          
+
           let age = today.getFullYear() - yy;
           const hasHadBirthday = (today.getMonth() > mm) || (today.getMonth() === mm && today.getDate() >= dd);
           if (!hasHadBirthday) age -= 1;
@@ -319,7 +319,7 @@ export default function EditProfileScreen() {
           dob: editDob,
           age: editAge,
         });
-        
+
         // Update local storage
         const currentUser = await AsyncStorage.getItem('currentUser');
         if (currentUser) {
@@ -334,7 +334,7 @@ export default function EditProfileScreen() {
           };
           await AsyncStorage.setItem('currentUser', JSON.stringify(updatedUser));
         }
-        
+
         Alert.alert('Success', 'Profile updated successfully!', [
           { text: 'OK', onPress: () => router.back() },
         ]);
@@ -405,7 +405,7 @@ export default function EditProfileScreen() {
         };
         await AsyncStorage.setItem('currentUser', JSON.stringify(updatedUser));
         setUserData(updatedUser);
-        
+
         Alert.alert('Success', 'Profile updated successfully!', [
           { text: 'OK', onPress: () => router.back() },
         ]);
@@ -534,24 +534,21 @@ export default function EditProfileScreen() {
                 <View style={styles.editField}>
                   <Text style={styles.editLabel}>Email Address</Text>
                   <TextInput
-                    style={[styles.editInput, emailError && styles.inputError]}
+                    style={[styles.editInput, styles.disabledInput]}
                     value={editEmail}
-                    onChangeText={handleEmailChange}
+                    editable={false}
                     placeholder="example@gmail.com"
                     placeholderTextColor="#999"
-                    keyboardType="email-address"
-                    autoCapitalize="none"
                   />
-                  {emailError ? <Text style={styles.errorText}>{emailError}</Text> : null}
                 </View>
 
                 <View style={styles.editField}>
                   <Text style={styles.editLabel}>Age</Text>
                   <TextInput
                     style={[styles.editInput, styles.disabledInput]}
-                    value={editAge}
+                    value={editAge ? `${editAge} years` : ''}
                     editable={false}
-                    placeholder="Enter Age"
+                    placeholder="Auto-calculated from DOB"
                     placeholderTextColor="#999"
                   />
                 </View>

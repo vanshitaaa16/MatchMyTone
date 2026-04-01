@@ -17,18 +17,23 @@ export const analyzeSkinImage = async (imageBase64, mimeType, apiKey) => {
 You are an expert color analyst and personal stylist. Analyze this image.
 
 If the image shows a CLEAR, WELL-LIT FACE (one person's face visible for skin analysis):
+- Determine the gender of the person in the photo: "male" or "female".
 - Determine the person's color season (e.g. Soft Autumn, Cool Summer, Warm Spring, Deep Winter, etc.) and a short description of why.
 - Determine their skin undertone: "Warm", "Cool", or "Neutral", with a short description.
+- Estimate their "skin age (looks like)" as a whole number of years and a 1-2 sentence description (friendly, non-medical, confidence-based).
 - Recommend 6 colors they should WEAR (flattering for their skin). For each color give: name (e.g. "Taupe", "Moss Green") and hex code (e.g. "#C4A484").
 - Recommend 3 colors they should AVOID (unflattering). For each give: name and hex code.
 
 Return ONLY valid JSON in this exact format (no markdown, no code block):
 {
   "isFace": true,
+  "detectedGender": "female",
   "seasonType": "Soft Autumn",
   "seasonDescription": "Your warm and subtle features give you a deep, understated look that feels rich and grounded.",
   "undertone": "Neutral",
   "undertoneDescription": "Neutral undertones blend warm and cool tones, often creating a balanced, olive-like appearance.",
+  "skinAge": 26,
+  "skinAgeDescription": "Your skin looks smooth and even with minimal visible lines—like someone in their mid‑20s.",
   "colorsToWear": [
     { "name": "Taupe", "hex": "#C4A484" },
     { "name": "Moss Green", "hex": "#8A9A5B" },

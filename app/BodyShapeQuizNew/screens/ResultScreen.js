@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { quizAPI } from "../../../src/api";
 import { useRouter } from "expo-router";
-import { TouchableOpacity } from "react-native";
+import { TouchableOpacity, Linking } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import hourglassImg from "../../../assets/hourglass.png"; 
+import hourglassImg from "../../../assets/hourglass.png";
 import pearImg from "../../../assets/pear.png";
 import rectangleImg from "../../../assets/rectangle.png";
 import appleImg from "../../../assets/apple.png";
@@ -54,6 +54,8 @@ import {
   Image,
   StatusBar,
 } from "react-native";
+import * as Print from "expo-print";
+import { shareAsync } from "expo-sharing";
 
 const SHAPE_DATA = {
   Rectangle: {
@@ -158,7 +160,7 @@ const SHAPE_DATA = {
       { title: "Cardigans", desc: "These add vertical movement that visually slims the shoulders." },
       { title: "Strapless Styles", desc: "Perfect for showing off toned arms without exaggerating shoulder width." },
     ],
-     browseLooks: [
+    browseLooks: [
       { title: "Scoop-Neck Top", img: scoopnecktop },
       { title: "Wide-Leg Jumpsuit", img: widelegjumpsuit },
       { title: "Minimal-Shoulder Blazer", img: minimalshoulderblazer },
@@ -174,6 +176,7 @@ export default function ResultScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const answersParam = params.answers;
+  const fromDashboard = params.fromDashboard === 'true';
   const [result, setResult] = useState(null);
 
   useEffect(() => {
@@ -191,11 +194,11 @@ export default function ResultScreen() {
     }
   }, [answersParam]);
 
-  // Save result to API
+  // Save result to API (skip if viewing from dashboard to prevent duplicates)
   useEffect(() => {
     const saveResult = async () => {
-      if (!result || !answersParam) return;
-      
+      if (!result || !answersParam || fromDashboard) return;
+
       try {
         const answers = typeof answersParam === 'string' ? JSON.parse(answersParam) : answersParam;
         await quizAPI.saveBodyShapeResult(answers, result);
@@ -269,9 +272,74 @@ export default function ResultScreen() {
             </View>
           ))}
         </View>
+
+        {/* Share actions */}
+        <View style={styles.shareRow}>
+          <TouchableOpacity style={styles.shareButton} onPress={() => handleEmailShare(result, shape)}>
+            <Ionicons name="mail-outline" size={20} color="#2C2C2C" />
+            <Text style={styles.shareButtonText}>Share on Email</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.shareButton} onPress={() => handleDownloadPdf(result, shape)}>
+            <Ionicons name="document-text-outline" size={20} color="#2C2C2C" />
+            <Text style={styles.shareButtonText}>Download PDF</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+function handleEmailShare(result, shape) {
+  if (!result || !shape) return;
+  const subject = encodeURIComponent("My Body Shape Analysis - MatchMyTone");
+  let body = `My Body Shape Analysis - MatchMyTone%0D%0A%0D%0A`;
+  body += `Body Shape: ${encodeURIComponent(result)}%0D%0A%0D%0A`;
+  body += `${encodeURIComponent(shape.description)}%0D%0A%0D%0A`;
+  body += `Top Recommendations:%0D%0A`;
+  (shape.recommendations || []).forEach((rec, i) => {
+    body += `${i + 1}. ${encodeURIComponent(rec.title)} - ${encodeURIComponent(rec.desc)}%0D%0A`;
+  });
+  body += `%0D%0A✨ Discovered with MatchMyTone ✨`;
+
+  const mailto = `mailto:?subject=${subject}&body=${body}`;
+  Linking.openURL(mailto).catch(() => { });
+}
+
+async function handleDownloadPdf(result, shape) {
+  if (!result || !shape) return;
+
+  const recsHtml = (shape.recommendations || [])
+    .map(
+      (rec) => `
+      <li style="margin-bottom:6px;">
+        <strong>${rec.title}</strong> – ${rec.desc}
+      </li>`
+    )
+    .join("");
+
+  const html = `
+    <html>
+      <body style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding:24px; background:#FFF8E7;">
+        <h1 style="font-size:24px; margin-bottom:4px; color:#2C2C2C;">MatchMyTone – Body Shape Analysis</h1>
+        <p style="margin-top:0; color:#C24C4A; font-weight:600;">Your personalised body shape report ✨</p>
+
+        <h2 style="font-size:18px; margin-top:24px; margin-bottom:8px;">Body Shape</h2>
+        <p style="font-size:16px; font-weight:700; margin:0;">${result}</p>
+        <p style="margin-top:6px; font-size:14px; color:#555;">${shape.description}</p>
+
+        <h2 style="font-size:18px; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+        <ul style="padding-left:18px; margin-top:0;">${recsHtml}</ul>
+
+        <p style="margin-top:32px; font-size:13px; color:#777;">Generated with love by MatchMyTone ✨</p>
+      </body>
+    </html>
+  `;
+
+  const { uri } = await Print.printToFileAsync({ html });
+  await shareAsync(uri, {
+    mimeType: "application/pdf",
+    dialogTitle: "Share your Body Shape Analysis PDF",
+  });
 }
 
 const styles = StyleSheet.create({
@@ -343,6 +411,29 @@ const styles = StyleSheet.create({
   lookTitle: {
     textAlign: "center",
     paddingVertical: 6,
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#2C2C2C",
+  },
+  shareRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 16,
+  },
+  shareButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    marginHorizontal: 4,
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "rgba(184,144,24,0.35)",
+    gap: 6,
+  },
+  shareButtonText: {
     fontSize: 14,
     fontWeight: "600",
     color: "#2C2C2C",

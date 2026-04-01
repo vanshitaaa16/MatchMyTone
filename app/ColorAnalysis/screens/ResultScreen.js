@@ -9,13 +9,16 @@ import {
   Dimensions,
   StatusBar,
   ActivityIndicator,
-  Share,
   Linking,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Print from 'expo-print';
+import { shareAsync } from 'expo-sharing';
 import { analyzeSkinImage } from '../services/colorAnalysisGemini';
 import { GEMINI_API_KEY } from '../geminiConfig';
 import { quizAPI } from '../../../src/api';
@@ -29,13 +32,23 @@ export default function ResultScreen() {
   const params = useLocalSearchParams();
   const photoUri = params?.photoUri;
   const fromDashboard = params?.fromDashboard === 'true';
+  const resultId = params?.resultId;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [selectedColorFilter, setSelectedColorFilter] = useState(null);
+  const [userAge, setUserAge] = useState(null);
+  const [userEmail, setUserEmail] = useState('');
+  const [userGender, setUserGender] = useState(null);
+  const [genderMismatch, setGenderMismatch] = useState(false);
+  const [detectedGender, setDetectedGender] = useState(null);
+  const [pdfDownloadedOnce, setPdfDownloadedOnce] = useState(false);
 
   useEffect(() => {
+    // Load basic user info for age-based palette + email share
+    loadUserProfileBasics();
+
     if (!photoUri) {
       // If coming from dashboard, try to load saved result
       if (fromDashboard) {
@@ -49,18 +62,58 @@ export default function ResultScreen() {
     runAnalysis();
   }, [photoUri, fromDashboard]);
 
+  const loadUserProfileBasics = async () => {
+    try {
+      const stored = await AsyncStorage.getItem('currentUser');
+      if (!stored) return;
+      const user = JSON.parse(stored);
+      if (user?.age) {
+        const parsedAge = Number(user.age);
+        if (!Number.isNaN(parsedAge)) {
+          setUserAge(parsedAge);
+        }
+      }
+      if (user?.email) {
+        setUserEmail(user.email);
+      }
+      if (user?.gender) {
+        setUserGender(user.gender.toLowerCase());
+      }
+    } catch (e) {
+      console.log('Failed to load user basics for color analysis:', e);
+    }
+  };
+
   const loadSavedResult = async () => {
     try {
       setLoading(true);
-      const response = await quizAPI.getQuizResult('color_analysis');
-      if (response && response.result) {
-        const saved = response.result;
+      let saved = null;
+
+      if (resultId) {
+        // Load specific result by ID
+        const response = await quizAPI.getColorAnalysisById(Number(resultId));
+        if (response && response.result) {
+          saved = response.result;
+        }
+      } else {
+        // Fallback: load the latest result
+        const response = await quizAPI.getQuizResult('color_analysis');
+        if (response && response.results && response.results.length > 0) {
+          saved = response.results[0];
+        } else if (response && response.result) {
+          saved = response.result;
+        }
+      }
+
+      if (saved) {
         setResult({
           isFace: saved.is_face,
           seasonType: saved.season_type,
           seasonDescription: saved.season_description,
           undertone: saved.undertone,
           undertoneDescription: saved.undertone_description,
+          skinAge: saved.skin_age,
+          skinAgeDescription: saved.skin_age_description,
           colorsToWear: saved.colors_to_wear || [],
           colorsToAvoid: saved.colors_to_avoid || [],
           description: saved.description,
@@ -83,16 +136,47 @@ export default function ResultScreen() {
     if (!photoUri) return;
     setLoading(true);
     setError('');
+    setGenderMismatch(false);
     try {
       const base64 = await FileSystem.readAsStringAsync(photoUri, {
         encoding: FileSystem.EncodingType.Base64,
       });
       const analysis = await analyzeSkinImage(base64, 'image/jpeg', GEMINI_API_KEY);
+
+      // Check gender mismatch: if face is detected, compare with registered user's gender
+      if (analysis.isFace && analysis.detectedGender) {
+        const detected = analysis.detectedGender.toLowerCase();
+        setDetectedGender(detected);
+
+        // Get registered user's gender directly from AsyncStorage to avoid race condition
+        let registeredGender = userGender;
+        if (!registeredGender) {
+          try {
+            const stored = await AsyncStorage.getItem('currentUser');
+            if (stored) {
+              const user = JSON.parse(stored);
+              if (user?.gender) {
+                registeredGender = user.gender.toLowerCase();
+                setUserGender(registeredGender);
+              }
+            }
+          } catch (e) {
+            console.log('Failed to read gender from AsyncStorage:', e);
+          }
+        }
+
+        if (registeredGender && detected !== registeredGender) {
+          setGenderMismatch(true);
+          setResult(analysis);
+          return;
+        }
+      }
+
       setResult(analysis);
       if (analysis.isFace && analysis.colorsToWear?.length) {
         setSelectedColorFilter(analysis.colorsToWear[0].name);
       }
-      
+
       // Save result to database
       await saveResultToDatabase(analysis);
     } catch (err) {
@@ -120,12 +204,14 @@ export default function ResultScreen() {
         season_description: analysis.seasonDescription || null,
         undertone: analysis.undertone || null,
         undertone_description: analysis.undertoneDescription || null,
+        skin_age: analysis.skinAge ?? null,
+        skin_age_description: analysis.skinAgeDescription ?? null,
         colors_to_wear: analysis.colorsToWear || [],
         colors_to_avoid: analysis.colorsToAvoid || [],
         is_face: analysis.isFace || false,
         description: analysis.description || null,
       };
-      
+
       await quizAPI.saveColorAnalysisResult(resultData);
     } catch (error) {
       console.error('Error saving color analysis result:', error);
@@ -133,51 +219,90 @@ export default function ResultScreen() {
     }
   };
 
-  const handleShare = async () => {
-    if (!result?.isFace) return;
-    try {
-      await Share.share({
-        message: `My color analysis: ${result.seasonType}, ${result.undertone} undertone. Colors to wear: ${result.colorsToWear?.map((c) => c.name).join(', ')}`,
-        title: 'My Color Analysis - MatchMyTone',
+  const handleEmailShare = async () => {
+    if (!result) return;
+
+    let body = `My Color Analysis - MatchMyTone%0D%0A%0D%0A`;
+    body += `Season Type: ${encodeURIComponent(result.seasonType || '—')}%0D%0A`;
+    if (result.seasonDescription) {
+      body += `${encodeURIComponent(result.seasonDescription)}%0D%0A%0D%0A`;
+    }
+    body += `Undertone: ${encodeURIComponent(result.undertone || '—')}%0D%0A`;
+    if (result.undertoneDescription) {
+      body += `${encodeURIComponent(result.undertoneDescription)}%0D%0A%0D%0A`;
+    }
+
+    const displayColors = getAgeAdjustedColorsToWear(result, userAge);
+    if (displayColors.length) {
+      body += `Colors to Wear:%0D%0A`;
+      displayColors.forEach((c, i) => {
+        body += `${i + 1}. ${encodeURIComponent(c.name)} (${c.hex || ''})%0D%0A`;
       });
-    } catch (e) {}
+      body += `%0D%0A`;
+    }
+
+    if (result.colorsToAvoid?.length) {
+      body += `Colors to Avoid:%0D%0A`;
+      result.colorsToAvoid.forEach((c, i) => {
+        body += `${i + 1}. ${encodeURIComponent(c.name)} (${c.hex || ''})%0D%0A`;
+      });
+      body += `%0D%0A`;
+    }
+
+    body += `%0D%0A✨ Discovered with MatchMyTone ✨`;
+
+    const subject = encodeURIComponent('My Color Analysis - MatchMyTone');
+    const to = userEmail ? encodeURIComponent(userEmail) : '';
+    const mailto = `mailto:${to}?subject=${subject}&body=${body}`;
+
+    try {
+      const canOpen = await Linking.canOpenURL(mailto);
+      if (canOpen) {
+        Linking.openURL(mailto);
+      }
+    } catch (e) {
+      console.log('Email share failed:', e);
+    }
   };
 
-  const openWhatsApp = () => {
-    if (!result?.isFace) {
-      Linking.openURL(`https://wa.me/?text=${encodeURIComponent('Check out my color analysis on MatchMyTone!')}`);
+  const handleDownloadPdf = async () => {
+    if (!result) return;
+
+    const doDownload = async () => {
+      try {
+        const ageGroupLabel = getAgeGroupLabel(userAge);
+        const displayColors = getAgeAdjustedColorsToWear(result, userAge);
+
+        const html = generatePdfHtml({
+          result,
+          ageGroupLabel,
+          displayColors,
+        });
+
+        const { uri } = await Print.printToFileAsync({ html });
+        await shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Share your Color Analysis PDF',
+        });
+        setPdfDownloadedOnce(true);
+      } catch (e) {
+        console.log('Download PDF failed:', e);
+      }
+    };
+
+    if (pdfDownloadedOnce) {
+      Alert.alert(
+        'Already downloaded',
+        'This file is already downloaded. Do you want to download it again?',
+        [
+          { text: 'No', style: 'cancel' },
+          { text: 'Yes', onPress: doDownload },
+        ]
+      );
       return;
     }
 
-    // Create comprehensive result message
-    let message = `🎨 *My Color Analysis - MatchMyTone*\n\n`;
-    message += `*Season Type:* ${result.seasonType || '—'}\n`;
-    if (result.seasonDescription) {
-      message += `${result.seasonDescription}\n\n`;
-    }
-    message += `*Undertone:* ${result.undertone || '—'}\n`;
-    if (result.undertoneDescription) {
-      message += `${result.undertoneDescription}\n\n`;
-    }
-    
-    if (result.colorsToWear && result.colorsToWear.length > 0) {
-      message += `*Colors to Wear:*\n`;
-      result.colorsToWear.forEach((c, i) => {
-        message += `${i + 1}. ${c.name}\n`;
-      });
-      message += `\n`;
-    }
-    
-    if (result.colorsToAvoid && result.colorsToAvoid.length > 0) {
-      message += `*Colors to Avoid:*\n`;
-      result.colorsToAvoid.forEach((c, i) => {
-        message += `${i + 1}. ${c.name}\n`;
-      });
-    }
-    
-    message += `\n✨ Discovered with MatchMyTone ✨`;
-    
-    Linking.openURL(`https://wa.me/?text=${encodeURIComponent(message)}`);
+    doDownload();
   };
 
   if (loading) {
@@ -217,7 +342,47 @@ export default function ResultScreen() {
     );
   }
 
-  if (!result) return null;
+  if (!result && !genderMismatch) return null;
+
+  // Gender mismatch screen
+  if (genderMismatch) {
+    const registeredGenderDisplay = userGender ? userGender.charAt(0).toUpperCase() + userGender.slice(1) : 'Unknown';
+    const detectedGenderDisplay = detectedGender ? detectedGender.charAt(0).toUpperCase() + detectedGender.slice(1) : 'Unknown';
+    return (
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" />
+        <SafeAreaView style={styles.safeArea}>
+          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+            <Ionicons name="arrow-back" size={24} color="#2C2C2C" />
+          </TouchableOpacity>
+          <View style={styles.genderMismatchCard}>
+            <View style={styles.genderMismatchIconContainer}>
+              <Ionicons name="warning" size={48} color="#E74C3C" />
+            </View>
+            <Text style={styles.genderMismatchTitle}>Gender Mismatch</Text>
+            <Text style={styles.genderMismatchMessage}>
+              The registered user is <Text style={styles.genderBoldText}>{registeredGenderDisplay}</Text>, but the face in the photo appears to be <Text style={styles.genderBoldText}>{detectedGenderDisplay}</Text>.{`\n\n`}Color Analysis can only be done for the registered user.{`\n\n`}Please register your own account to get your personalized Color Analysis done.
+            </Text>
+            <TouchableOpacity
+              style={styles.genderMismatchButton}
+              onPress={() => router.back()}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="camera" size={20} color="#FFF" style={{ marginRight: 8 }} />
+              <Text style={styles.genderMismatchButtonText}>Try Again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.genderMismatchGoBackButton}
+              onPress={() => router.push('/home')}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.genderMismatchGoBackText}>Go to Home</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </View>
+    );
+  }
 
   if (!result.isFace) {
     return (
@@ -242,6 +407,10 @@ export default function ResultScreen() {
       </View>
     );
   }
+
+  const ageGroupLabel = getAgeGroupLabel(userAge);
+  const displayColorsToWear = getAgeAdjustedColorsToWear(result, userAge);
+  const ageInsightText = getAgeInsightText(userAge, ageGroupLabel, result?.seasonType);
 
   return (
     <View style={styles.container}>
@@ -304,12 +473,24 @@ export default function ResultScreen() {
             </View>
           </View>
 
+          {/* Skin age card (looks like) */}
+          <View style={styles.sectionCard}>
+            <View style={styles.leafDecor} />
+            <Text style={styles.cardLabel}>SKIN AGE (LOOKS LIKE)</Text>
+            <Text style={styles.skinAgeYears}>
+              {result?.skinAge ? `${result.skinAge} years` : '—'}
+            </Text>
+            <Text style={styles.cardDescription}>
+              {result?.skinAgeDescription || ageInsightText}
+            </Text>
+          </View>
+
           {/* Colors to wear */}
           <View style={styles.sectionCard}>
             <View style={styles.leafDecor} />
             <Text style={styles.cardLabel}>COLORS TO WEAR</Text>
             <View style={styles.colorGrid}>
-              {(result.colorsToWear || []).slice(0, 6).map((c, i) => (
+              {displayColorsToWear.slice(0, 6).map((c, i) => (
                 <View key={i} style={[styles.colorSwatch, { backgroundColor: c.hex || '#CCC' }]}>
                   <Text style={styles.colorSwatchText}>{c.name}</Text>
                 </View>
@@ -330,49 +511,285 @@ export default function ResultScreen() {
             </View>
           </View>
 
-          {/* Share button */}
           <View style={styles.shareRow}>
-            <TouchableOpacity style={styles.shareButtonWhite} onPress={openWhatsApp}>
-              <Ionicons name="logo-whatsapp" size={24} color="#25D366" />
-              <Text style={styles.shareButtonTextDark}>Share on WhatsApp</Text>
+            <TouchableOpacity style={styles.shareButtonWhite} onPress={handleEmailShare}>
+              <Ionicons name="mail-outline" size={22} color="#2C2C2C" />
+              <Text style={styles.shareButtonTextDark}>Share on Email</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.shareButtonWhite} onPress={handleDownloadPdf}>
+              <Ionicons name="document-text-outline" size={22} color="#2C2C2C" />
+              <Text style={styles.shareButtonTextDark}>Download PDF</Text>
             </TouchableOpacity>
           </View>
-
-          {/* Browse Looks */}
-          <Text style={styles.browseTitle}>Browse Looks for your analysis</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.colorFiltersScroll}
-            contentContainerStyle={styles.colorFiltersContent}
-          >
-            {(result.colorsToWear || []).map((c, i) => (
-              <TouchableOpacity
-                key={i}
-                style={[
-                  styles.colorFilterChip,
-                  { backgroundColor: c.hex || '#CCC' },
-                  selectedColorFilter === c.name && styles.colorFilterChipSelected,
-                ]}
-                onPress={() => setSelectedColorFilter(c.name)}
-              >
-                <Text
-                  style={[
-                    styles.colorFilterChipText,
-                    (c.hex && isDarkHex(c.hex)) ? styles.colorFilterChipTextLight : styles.colorFilterChipTextDark,
-                  ]}
-                >
-                  {c.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
 
           <View style={styles.bottomPadding} />
         </SafeAreaView>
       </ScrollView>
     </View>
   );
+}
+
+// --- Age-based color logic & helpers ---
+
+// 0–40: balanced palettes (not neon, not dull). Built around primary colours + gentle secondaries.
+const youthPalettes = [
+  [
+    { name: 'Classic Red', hex: '#C62828' },
+    { name: 'Primary Blue', hex: '#1565C0' },
+    { name: 'Sunflower Yellow', hex: '#F2C94C' },
+    { name: 'Leaf Green', hex: '#2E7D32' },
+    { name: 'Warm Orange', hex: '#F2994A' },
+    { name: 'Soft Purple', hex: '#6C5CE7' },
+  ],
+  [
+    { name: 'Cherry Red', hex: '#D32F2F' },
+    { name: 'Sky Blue', hex: '#4A90E2' },
+    { name: 'Golden Yellow', hex: '#F5B700' },
+    { name: 'Teal', hex: '#2A9D8F' },
+    { name: 'Coral', hex: '#E76F51' },
+    { name: 'Plum', hex: '#7B2CBF' },
+  ],
+  [
+    { name: 'Brick Red', hex: '#B23A48' },
+    { name: 'Denim Blue', hex: '#2F5D8A' },
+    { name: 'Mustard Yellow', hex: '#D4A017' },
+    { name: 'Olive Green', hex: '#6B8E23' },
+    { name: 'Terracotta', hex: '#C76D4A' },
+    { name: 'Lavender', hex: '#8E7CC3' },
+  ],
+  [
+    { name: 'Deep Red', hex: '#8E1B1B' },
+    { name: 'Navy Blue', hex: '#1D3557' },
+    { name: 'Butter Yellow', hex: '#F6D365' },
+    { name: 'Emerald Green', hex: '#2D6A4F' },
+    { name: 'Burnt Orange', hex: '#C45A2A' },
+    { name: 'Grape', hex: '#5E548E' },
+  ],
+  [
+    { name: 'Warm Red', hex: '#C0392B' },
+    { name: 'Cornflower Blue', hex: '#3F7CAC' },
+    { name: 'Daffodil Yellow', hex: '#F2D64B' },
+    { name: 'Sea Green', hex: '#3C8D7D' },
+    { name: 'Apricot Orange', hex: '#F4A261' },
+    { name: 'Royal Purple', hex: '#5B2C83' },
+  ],
+];
+
+const softPalettes = [
+  [
+    { name: 'Warm Ivory', hex: '#F8EBDD' },
+    { name: 'Camel', hex: '#C19A6B' },
+    { name: 'Soft Olive', hex: '#A6AD7B' },
+    { name: 'Muted Terracotta', hex: '#B86B5A' },
+    { name: 'Smoky Teal', hex: '#4E7C7A' },
+    { name: 'Chocolate', hex: '#6B4E3D' },
+  ],
+  [
+    { name: 'Cream', hex: '#F5F0E8' },
+    { name: 'Beige', hex: '#D8C0A8' },
+    { name: 'Muted Mocha', hex: '#A47C6D' },
+    { name: 'Dusty Rose', hex: '#D8A7B1' },
+    { name: 'Warm Navy', hex: '#2D3A4A' },
+    { name: 'Soft Gold', hex: '#C9B37E' },
+  ],
+  [
+    { name: 'Champagne', hex: '#E8D0B0' },
+    { name: 'Light Sand', hex: '#E2C8A7' },
+    { name: 'Sage Green', hex: '#A3B18A' },
+    { name: 'Rose Nude', hex: '#CFA19A' },
+    { name: 'Warm Charcoal', hex: '#4A3F3A' },
+    { name: 'Mauve Taupe', hex: '#9D8C86' },
+  ],
+];
+
+function getAgeGroupLabel(age) {
+  if (!age || Number.isNaN(Number(age))) return 'All ages';
+  return Number(age) <= 40 ? 'Youthful (0–40)' : 'Elegant (40+)';
+}
+
+function getAgeInsightText(age, ageGroupLabel, seasonType) {
+  if (!age || Number.isNaN(Number(age))) {
+    return 'Your profile age helps us fine‑tune your palette, but this analysis is flattering across ages. Focus on how these shades make your skin look bright and alive.';
+  }
+
+  if (Number(age) <= 40) {
+    return `You fall in the ${ageGroupLabel} group, so balanced, clear colours work beautifully on you. Think classic primary shades (red, blue, yellow) and gentle secondaries that feel fresh without looking neon.`;
+  }
+
+  return `You fall in the ${ageGroupLabel} group, where skin often looks its best in softer, luxurious hues. Gentle neutrals like cream, camel, beige and soft taupes will keep your ${seasonType || 'season'} looking polished, fresh and refined.`;
+}
+
+function pickPaletteForUser(age, seasonType, undertone) {
+  const isYouthful = !age || Number(age) <= 40;
+  const basePalettes = isYouthful ? youthPalettes : softPalettes;
+
+  if (!seasonType && !undertone) return basePalettes[0];
+
+  const season = (seasonType || '').toLowerCase();
+  const tone = (undertone || '').toLowerCase();
+
+  // Choose different palettes deterministically so 0–40 users don't all see the same set.
+  // We map season/undertone to an index and mod by palette count.
+  const key = `${season}|${tone}`;
+  const idx = stablePaletteIndex(key, basePalettes.length);
+
+  // Light steering so "warm" leans warm-ish palettes and "cool" leans cool-ish palettes.
+  if (isYouthful) {
+    if (season.includes('spring') || tone.includes('warm')) return basePalettes[idx % basePalettes.length];
+    if (season.includes('summer') || tone.includes('cool')) return basePalettes[(idx + 1) % basePalettes.length];
+    if (season.includes('autumn') || season.includes('fall')) return basePalettes[(idx + 2) % basePalettes.length];
+    if (season.includes('winter')) return basePalettes[(idx + 3) % basePalettes.length];
+    return basePalettes[idx % basePalettes.length];
+  }
+
+  // 40+ stays curated but still varies by season/undertone.
+  if (season.includes('spring') || tone.includes('warm')) return basePalettes[idx % basePalettes.length];
+  if (season.includes('summer') || tone.includes('cool')) return basePalettes[(idx + 1) % basePalettes.length];
+  if (season.includes('autumn') || season.includes('fall')) return basePalettes[(idx + 2) % basePalettes.length];
+  if (season.includes('winter')) return basePalettes[(idx + 1) % basePalettes.length];
+  return basePalettes[idx % basePalettes.length];
+}
+
+function stablePaletteIndex(input, mod) {
+  // Small deterministic hash (no crypto) to spread users across palettes.
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+  }
+  return mod ? hash % mod : 0;
+}
+
+function getAgeAdjustedColorsToWear(result, age) {
+  if (!result) return [];
+  const baseAIColors = Array.isArray(result.colorsToWear) ? result.colorsToWear : [];
+
+  // If no age, just fall back to AI colors
+  if (!age || Number.isNaN(Number(age))) {
+    return baseAIColors;
+  }
+
+  const palette = pickPaletteForUser(age, result.seasonType, result.undertone);
+
+  // For 40+ we do NOT keep bright AI “anchors” (this was causing saturated greens/reds).
+  // We return a soft, curated palette that still respects season/undertone.
+  if (Number(age) > 40) {
+    return palette;
+  }
+
+  // For 0–40 we can keep a couple AI anchors, then fill with vibrant palette.
+  const anchors = baseAIColors
+    .filter((c) => c?.hex && !isNeonOrTooBright(c))
+    .slice(0, 2);
+  const blended = [...anchors];
+
+  palette.forEach((p) => {
+    if (!blended.find((c) => c.name === p.name)) {
+      blended.push(p);
+    }
+  });
+
+  return blended;
+}
+
+function isNeonOrTooBright(color) {
+  const name = String(color?.name || '').toLowerCase();
+  if (name.includes('neon')) return true;
+
+  const hex = color?.hex;
+  if (!hex || typeof hex !== 'string' || !hex.startsWith('#') || (hex.length !== 7)) return false;
+
+  const { s, l } = hexToHsl(hex);
+  // Neon-ish tends to be very saturated and fairly bright.
+  if (s > 0.78 && l > 0.55) return true;
+  // Very bright "highlighter" colors
+  if (l > 0.86 && s > 0.6) return true;
+  return false;
+}
+
+function hexToHsl(hex) {
+  const n = parseInt(hex.replace('#', ''), 16);
+  const r = ((n >> 16) & 0xff) / 255;
+  const g = ((n >> 8) & 0xff) / 255;
+  const b = (n & 0xff) / 255;
+
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  let s = 0;
+  const l = (max + min) / 2;
+
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r:
+        h = (g - b) / d + (g < b ? 6 : 0);
+        break;
+      case g:
+        h = (b - r) / d + 2;
+        break;
+      default:
+        h = (r - g) / d + 4;
+        break;
+    }
+    h /= 6;
+  }
+
+  return { h, s, l };
+}
+
+function generatePdfHtml({ result, ageGroupLabel, displayColors }) {
+  const safeSeason = result.seasonType || '—';
+  const safeUndertone = result.undertone || '—';
+
+  const colorsToWearHtml = displayColors
+    .map(
+      (c) => `
+      <div style="margin-bottom:8px; display:flex; align-items:center;">
+        <div style="width:18px;height:18px;border-radius:4px;background:${c.hex ||
+        '#ccc'};margin-right:8px;border:1px solid #999;"></div>
+        <span style="font-size:14px;">${c.name}${c.hex ? ` (${c.hex})` : ''}</span>
+      </div>`
+    )
+    .join('');
+
+  const colorsToAvoidHtml = (result.colorsToAvoid || [])
+    .map(
+      (c) => `
+      <li style="margin-bottom:4px;font-size:14px;">${c.name}${c.hex ? ` (${c.hex})` : ''}</li>`
+    )
+    .join('');
+
+  return `
+    <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+      </head>
+      <body style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding:24px; background:#FFF8E7;">
+        <h1 style="font-size:24px; margin-bottom:4px; color:#2C2C2C;">MatchMyTone – Color Analysis</h1>
+        <p style="margin-top:0; color:#8B5CF6; font-weight:600;">Your personalised report ✨</p>
+
+        <h2 style="font-size:18px; margin-top:24px; margin-bottom:8px;">Season Type</h2>
+        <p style="margin:0; font-size:15px; font-weight:600;">${safeSeason}</p>
+        <p style="margin-top:4px; font-size:14px; color:#555;">${result.seasonDescription || ''}</p>
+
+        <h2 style="font-size:18px; margin-top:24px; margin-bottom:8px;">Undertone</h2>
+        <p style="margin:0; font-size:15px; font-weight:600;">${safeUndertone}</p>
+        <p style="margin-top:4px; font-size:14px; color:#555;">${result.undertoneDescription || ''}</p>
+
+        <h2 style="font-size:18px; margin-top:24px; margin-bottom:4px;">Age Group Insight</h2>
+        <p style="margin:0; font-size:14px; color:#555;">${ageGroupLabel}</p>
+
+        <h2 style="font-size:18px; margin-top:24px; margin-bottom:8px;">Colors to Wear</h2>
+        <div>${colorsToWearHtml}</div>
+
+        <h2 style="font-size:18px; margin-top:24px; margin-bottom:8px;">Colors to Avoid</h2>
+        <ul style="padding-left:18px; margin-top:0;">${colorsToAvoidHtml}</ul>
+
+        <p style="margin-top:32px; font-size:13px; color:#777;">Generated with love by MatchMyTone ✨</p>
+      </body>
+    </html>
+  `;
 }
 
 function isDarkHex(hex) {
@@ -634,6 +1051,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#2C2C2C',
   },
+  skinAgeYears: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#A0522D',
+    marginBottom: 6,
+  },
   browseTitle: {
     fontSize: 16,
     fontWeight: '600',
@@ -713,5 +1136,69 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   takeAgainText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
+  genderMismatchCard: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+  },
+  genderMismatchIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(231, 76, 60, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  genderMismatchTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#2C2C2C',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  genderMismatchMessage: {
+    fontSize: 15,
+    color: '#555',
+    textAlign: 'center',
+    lineHeight: 23,
+    marginBottom: 28,
+    paddingHorizontal: 10,
+  },
+  genderBoldText: {
+    fontWeight: '700',
+    color: '#2C2C2C',
+  },
+  genderMismatchButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#8B5CF6',
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    width: '100%',
+    marginBottom: 12,
+    shadowColor: '#8B5CF6',
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  genderMismatchButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  genderMismatchGoBackButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+  },
+  genderMismatchGoBackText: {
+    color: '#8B5CF6',
+    fontSize: 16,
+    fontWeight: '600',
+  },
 });
 

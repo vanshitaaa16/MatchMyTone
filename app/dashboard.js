@@ -12,16 +12,12 @@ const { width, height } = Dimensions.get('window');
 export default function DashboardScreen() {
   const router = useRouter();
   const [resultsExpanded, setResultsExpanded] = useState(false);
-  const [quizResults, setQuizResults] = useState({
-    skincare: null,
-    body_shape: null,
-    face_shape: null,
-    color_analysis: null
-  });
-  const [quizData, setQuizData] = useState({
-    skincare: null,
-    body_shape: null,
-    face_shape: null,
+  // Now storing arrays of results per module
+  const [allResults, setAllResults] = useState({
+    skincare: [],
+    body_shape: [],
+    face_shape: [],
+    color_analysis: []
   });
   const [loading, setLoading] = useState(true);
   const [errorMessages, setErrorMessages] = useState({
@@ -47,18 +43,11 @@ export default function DashboardScreen() {
       setLoading(true);
       const response = await quizAPI.getAllResults();
       if (response && response.results) {
-        setQuizResults({
-          skincare: response.results.skincare?.result || null,
-          body_shape: response.results.body_shape?.result || null,
-          face_shape: response.results.face_shape?.result || null,
-          color_analysis: response.results.color_analysis?.season_type || null
-        });
-        // Store full data including answers for navigation
-        setQuizData({
-          skincare: response.results.skincare || null,
-          body_shape: response.results.body_shape || null,
-          face_shape: response.results.face_shape || null,
-          color_analysis: response.results.color_analysis || null,
+        setAllResults({
+          skincare: Array.isArray(response.results.skincare) ? response.results.skincare : (response.results.skincare ? [response.results.skincare] : []),
+          body_shape: Array.isArray(response.results.body_shape) ? response.results.body_shape : (response.results.body_shape ? [response.results.body_shape] : []),
+          face_shape: Array.isArray(response.results.face_shape) ? response.results.face_shape : (response.results.face_shape ? [response.results.face_shape] : []),
+          color_analysis: Array.isArray(response.results.color_analysis) ? response.results.color_analysis : (response.results.color_analysis ? [response.results.color_analysis] : []),
         });
       }
     } catch (error) {
@@ -72,77 +61,97 @@ export default function DashboardScreen() {
     setResultsExpanded(!resultsExpanded);
   };
 
-  const handleSeeResults = (quizType) => {
-    // Clear previous error for this quiz type
+  const handleSeeResult = (quizType, resultItem, index) => {
     setErrorMessages(prev => ({ ...prev, [quizType]: '' }));
 
-    // Check if quiz result exists
-    let hasResult = false;
-    let route = '';
-    let answers = null;
-
-    switch(quizType) {
-      case 'skincare':
-        hasResult = quizResults.skincare !== null;
-        route = '/SkincareAnalysis/result';
-        answers = quizData.skincare?.answers || null;
-        break;
-      case 'body_shape':
-        hasResult = quizResults.body_shape !== null;
-        route = '/BodyShapeQuizNew/result';
-        answers = quizData.body_shape?.answers || null;
-        break;
-      case 'face_shape':
-        hasResult = quizResults.face_shape !== null;
-        route = '/FaceShapeNew/result';
-        answers = quizData.face_shape?.answers || null;
-        break;
-      case 'color_analysis':
-        hasResult = quizResults.color_analysis !== null;
-        route = '/ColorAnalysis/result';
-        // Pass the saved result data if available
-        break;
-    }
-
-    if (!hasResult) {
-      setErrorMessages(prev => ({ ...prev, [quizType]: quizType === 'color_analysis' ? 'Take the analysis first' : 'Take the quiz first' }));
-      return;
-    }
-
-    // Navigate to result screen
-    if (quizType === 'color_analysis') {
-      // For color analysis, navigate to result screen with saved data
-      const colorData = quizData.color_analysis;
-      if (colorData && colorData.photo_uri) {
+    switch (quizType) {
+      case 'color_analysis': {
         router.push({
-          pathname: route,
-          params: { photoUri: colorData.photo_uri, fromDashboard: 'true' }
+          pathname: '/ColorAnalysis/result',
+          params: { resultId: String(resultItem.id), fromDashboard: 'true' }
         });
-        return;
-      } else {
-        router.push(route);
-        return;
+        break;
       }
-    }
-
-    // Navigate to result screen with answers
-    if (route && answers) {
-      console.log(`Navigating to ${route} with answers:`, answers);
-      router.push({
-        pathname: route,
-        params: { answers: JSON.stringify(answers) }
-      });
-    } else if (route) {
-      // Fallback: navigate without answers (result screen should handle this)
-      console.log(`Navigating to ${route} without answers`);
-      router.push(route);
-    } else {
-      console.error('No route or answers found for quiz type:', quizType);
+      case 'skincare': {
+        const answers = resultItem.answers || null;
+        if (answers) {
+          router.push({
+            pathname: '/SkincareAnalysis/result',
+            params: { answers: JSON.stringify(answers), fromDashboard: 'true' }
+          });
+        } else {
+          router.push('/SkincareAnalysis/result');
+        }
+        break;
+      }
+      case 'body_shape': {
+        const answers = resultItem.answers || null;
+        if (answers) {
+          router.push({
+            pathname: '/BodyShapeQuizNew/result',
+            params: { answers: JSON.stringify(answers), fromDashboard: 'true' }
+          });
+        } else {
+          router.push('/BodyShapeQuizNew/result');
+        }
+        break;
+      }
+      case 'face_shape': {
+        const answers = resultItem.answers || null;
+        if (answers) {
+          router.push({
+            pathname: '/FaceShapeNew/result',
+            params: { answers: JSON.stringify(answers), fromDashboard: 'true' }
+          });
+        } else {
+          router.push('/FaceShapeNew/result');
+        }
+        break;
+      }
     }
   };
 
   const handleBack = () => {
     router.push('/home');
+  };
+
+  const renderResultsList = (quizType, label, getResultLabel) => {
+    const results = allResults[quizType];
+    const hasResults = results && results.length > 0;
+
+    return (
+      <View style={styles.resultItem}>
+        <View style={styles.resultRow}>
+          <Text style={styles.resultLabel}>{label}:</Text>
+          <Text style={styles.resultValue}>
+            {loading ? 'Loading...' : (hasResults ? `${results.length} result${results.length > 1 ? 's' : ''}` : '-')}
+          </Text>
+        </View>
+        {!hasResults && !loading && (
+          <Text style={styles.noResultsHint}>{quizType === 'color_analysis' ? 'Take the analysis first' : 'Take the quiz first'}</Text>
+        )}
+        {hasResults && results.map((item, index) => (
+          <View key={item.id || index} style={styles.resultEntryCard}>
+            <View style={styles.resultEntryRow}>
+              <View style={styles.resultEntryInfo}>
+                <Text style={styles.resultEntryIndex}>#{index + 1}</Text>
+                <Text style={styles.resultEntryValue}>{getResultLabel(item)}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.seeResultsButton}
+                onPress={() => handleSeeResult(quizType, item, index)}
+                activeOpacity={0.6}
+              >
+                <Text style={styles.seeResultsButtonText}>See Results</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ))}
+        {errorMessages[quizType] ? (
+          <Text style={styles.errorText}>{errorMessages[quizType]}</Text>
+        ) : null}
+      </View>
+    );
   };
 
   return (
@@ -170,127 +179,52 @@ export default function DashboardScreen() {
             <Text style={styles.headerTitle}>Dashboard</Text>
           </View>
 
-          <ScrollView 
+          <ScrollView
             style={styles.scrollView}
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.card}>
               <View style={styles.optionsContainer}>
-              {/* Results Option */}
-              <View style={styles.optionSection}>
-                <TouchableOpacity 
-                  style={styles.mainOption} 
-                  onPress={handleResultsClick}
-                  activeOpacity={0.6}
-                >
-                  <Text style={styles.optionText}>RESULTS</Text>
-                  <Ionicons 
-                    name={resultsExpanded ? "chevron-up" : "chevron-down"} 
-                    size={22} 
-                    color="#2C2C2C" 
-                  />
-                </TouchableOpacity>
-                <View style={styles.divider} />
+                {/* Results Option */}
+                <View style={styles.optionSection}>
+                  <TouchableOpacity
+                    style={styles.mainOption}
+                    onPress={handleResultsClick}
+                    activeOpacity={0.6}
+                  >
+                    <Text style={styles.optionText}>RESULTS</Text>
+                    <Ionicons
+                      name={resultsExpanded ? "chevron-up" : "chevron-down"}
+                      size={22}
+                      color="#2C2C2C"
+                    />
+                  </TouchableOpacity>
+                  <View style={styles.divider} />
 
-                {/* Sub-options that appear when Results is expanded */}
-                {resultsExpanded && (
-                  <View style={styles.subOptionsContainer}>
-                    {/* Color Analysis */}
-                    <View style={styles.resultItem}>
-                      <View style={styles.resultRow}>
-                        <Text style={styles.resultLabel}>Color Analysis:</Text>
-                        <Text style={styles.resultValue}>
-                          {loading ? 'Loading...' : (quizResults.color_analysis || '-')}
-                        </Text>
-                      </View>
-                      <TouchableOpacity 
-                        style={styles.seeResultsButton}
-                        onPress={() => handleSeeResults('color_analysis')}
-                        activeOpacity={0.6}
-                      >
-                        <Text style={styles.seeResultsButtonText}>See Results</Text>
-                      </TouchableOpacity>
-                      {errorMessages.color_analysis ? (
-                        <Text style={styles.errorText}>{errorMessages.color_analysis}</Text>
-                      ) : null}
+                  {/* Sub-options that appear when Results is expanded */}
+                  {resultsExpanded && (
+                    <View style={styles.subOptionsContainer}>
+                      {renderResultsList('color_analysis', 'Color Analysis', (item) => item.season_type || 'Analysis done')}
+                      {renderResultsList('skincare', 'Skincare Analysis', (item) => item.result || 'Analysis done')}
+                      {renderResultsList('body_shape', 'Body Analysis', (item) => item.result || 'Analysis done')}
+                      {renderResultsList('face_shape', 'Face Analysis', (item) => item.result || 'Analysis done')}
                     </View>
+                  )}
+                </View>
 
-                    {/* Skincare Analysis */}
-                    <View style={styles.resultItem}>
-                      <View style={styles.resultRow}>
-                        <Text style={styles.resultLabel}>Skincare Analysis:</Text>
-                        <Text style={styles.resultValue}>
-                          {loading ? 'Loading...' : (quizResults.skincare || '-')}
-                        </Text>
-                      </View>
-                      <TouchableOpacity 
-                        style={styles.seeResultsButton}
-                        onPress={() => handleSeeResults('skincare')}
-                        activeOpacity={0.6}
-                      >
-                        <Text style={styles.seeResultsButtonText}>See Results</Text>
-                      </TouchableOpacity>
-                      {errorMessages.skincare ? (
-                        <Text style={styles.errorText}>{errorMessages.skincare}</Text>
-                      ) : null}
-                    </View>
-
-                    {/* Body Analysis */}
-                    <View style={styles.resultItem}>
-                      <View style={styles.resultRow}>
-                        <Text style={styles.resultLabel}>Body Analysis:</Text>
-                        <Text style={styles.resultValue}>
-                          {loading ? 'Loading...' : (quizResults.body_shape || '-')}
-                        </Text>
-                      </View>
-                      <TouchableOpacity 
-                        style={styles.seeResultsButton}
-                        onPress={() => handleSeeResults('body_shape')}
-                        activeOpacity={0.6}
-                      >
-                        <Text style={styles.seeResultsButtonText}>See Results</Text>
-                      </TouchableOpacity>
-                      {errorMessages.body_shape ? (
-                        <Text style={styles.errorText}>{errorMessages.body_shape}</Text>
-                      ) : null}
-                    </View>
-
-                    {/* Face Analysis */}
-                    <View style={styles.resultItem}>
-                      <View style={styles.resultRow}>
-                        <Text style={styles.resultLabel}>Face Analysis:</Text>
-                        <Text style={styles.resultValue}>
-                          {loading ? 'Loading...' : (quizResults.face_shape || '-')}
-                        </Text>
-                      </View>
-                      <TouchableOpacity 
-                        style={styles.seeResultsButton}
-                        onPress={() => handleSeeResults('face_shape')}
-                        activeOpacity={0.6}
-                      >
-                        <Text style={styles.seeResultsButtonText}>See Results</Text>
-                      </TouchableOpacity>
-                      {errorMessages.face_shape ? (
-                        <Text style={styles.errorText}>{errorMessages.face_shape}</Text>
-                      ) : null}
-                    </View>
-                  </View>
-                )}
+                {/* About Us Option - appears below Results (and its sub-options if expanded) */}
+                <View style={styles.optionSection}>
+                  <TouchableOpacity
+                    style={styles.mainOption}
+                    onPress={() => router.push('/about')}
+                    activeOpacity={0.6}
+                  >
+                    <Text style={styles.optionText}>ABOUT US</Text>
+                  </TouchableOpacity>
+                  <View style={styles.divider} />
+                </View>
               </View>
-
-              {/* About Us Option - appears below Results (and its sub-options if expanded) */}
-              <View style={styles.optionSection}>
-                <TouchableOpacity 
-                  style={styles.mainOption}
-                  onPress={() => router.push('/about')}
-                  activeOpacity={0.6}
-                >
-                  <Text style={styles.optionText}>ABOUT US</Text>
-                </TouchableOpacity>
-                <View style={styles.divider} />
-              </View>
-            </View>
             </View>
           </ScrollView>
         </View>
@@ -303,13 +237,13 @@ const styles = StyleSheet.create({
   bg: {
     flex: 1,
   },
-  safe: { 
-    flex: 1, 
-    backgroundColor: "#FFF8E7" 
+  safe: {
+    flex: 1,
+    backgroundColor: "#FFF8E7"
   },
-  container: { 
-    flex: 1, 
-    padding: 20 
+  container: {
+    flex: 1,
+    padding: 20
   },
   scrollView: {
     flex: 1,
@@ -326,10 +260,10 @@ const styles = StyleSheet.create({
     padding: 8,
     marginRight: 8,
   },
-  headerTitle: { 
-    fontSize: 23, 
-    fontWeight: "700", 
-    color: "#2C2C2C" 
+  headerTitle: {
+    fontSize: 23,
+    fontWeight: "700",
+    color: "#2C2C2C"
   },
   card: {
     backgroundColor: "#FFFFFF",
@@ -392,15 +326,13 @@ const styles = StyleSheet.create({
   },
   seeResultsButton: {
     backgroundColor: '#b89018',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: 8,
-    alignSelf: 'flex-start',
-    marginTop: 4,
   },
   seeResultsButtonText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
   },
   errorText: {
@@ -408,6 +340,43 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 4,
     fontWeight: '500',
+  },
+  noResultsHint: {
+    color: '#999',
+    fontSize: 13,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  resultEntryCard: {
+    backgroundColor: 'rgba(184, 144, 24, 0.06)',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(184, 144, 24, 0.15)',
+  },
+  resultEntryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  resultEntryInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 10,
+  },
+  resultEntryIndex: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#b89018',
+    marginRight: 10,
+    minWidth: 24,
+  },
+  resultEntryValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2C2C2C',
   },
   gridOverlay: {
     position: 'absolute',
@@ -430,5 +399,3 @@ const styles = StyleSheet.create({
     width: 1,
   },
 });
-
-

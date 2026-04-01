@@ -14,6 +14,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { quizAPI } from "../../../src/api";
+import * as Print from "expo-print";
+import { shareAsync } from "expo-sharing";
 
 /* ---------- CONSTANTS ---------- */
 const { width } = Dimensions.get("window");
@@ -99,14 +101,14 @@ const SKIN_CONCERNS = {
     { title: "Uneven Texture", description: "Skin feels oily in some areas and rough in others." },
     { title: "Dry Cheeks", description: "Cheeks feel dry, tight, or rough compared to oily areas." },
     { title: "Occasional Breakouts", description: "Breakouts appear mainly in the T-zone due to oil buildup." },
-    
-    
+
+
   ],
   D: [
     { title: "Occasional Breakouts", description: "Minor pimples may appear due to stress, hormones, or product buildup." },
     { title: "Mild Oiliness", description: "Light oiliness can appear in the T-zone by end of day." },
-     { title: "Dehydration", description: "Skin can feel tight if not moisturised properly." },
-      { title: "Sensitivity to Weather", description: "Skin may react mildly to sudden climate changes." },
+    { title: "Dehydration", description: "Skin can feel tight if not moisturised properly." },
+    { title: "Sensitivity to Weather", description: "Skin may react mildly to sudden climate changes." },
   ],
   E: [
     { title: "Redness", description: "Skin turns red easily due to irritation or environmental triggers." },
@@ -287,7 +289,7 @@ const STEP_RECOMMENDATIONS = {
  */
 function determineSkinType(counts) {
   const { A, B, C, D, E } = counts;
-  
+
   if (A === B && B === C && C === D && D === E) {
     return 'C';
   }
@@ -335,6 +337,7 @@ export default function ResultScreen() {
   const horizontalRef = useRef(null);
   const [activeStep, setActiveStep] = useState("cleanser");
   const answersParam = params.answers;
+  const fromDashboard = params.fromDashboard === 'true';
 
   const skinType = useMemo(() => {
     if (!answersParam) return null;
@@ -342,7 +345,7 @@ export default function ResultScreen() {
     try {
       const answers = typeof answersParam === 'string' ? JSON.parse(answersParam) : answersParam;
       const counts = { A: 0, B: 0, C: 0, D: 0, E: 0 };
-      
+
       Object.values(answers).forEach((answer) => {
         if (answer && typeof answer === 'object' && answer.label) {
           const key = answer.label;
@@ -359,11 +362,11 @@ export default function ResultScreen() {
     }
   }, [answersParam]);
 
-  // Save result to API
+  // Save result to API (skip if viewing from dashboard to prevent duplicates)
   React.useEffect(() => {
     const saveResult = async () => {
-      if (!skinType || !answersParam) return;
-      
+      if (!skinType || !answersParam || fromDashboard) return;
+
       try {
         const answers = typeof answersParam === 'string' ? JSON.parse(answersParam) : answersParam;
         const skinTypeName = SKIN_TYPES[skinType].name;
@@ -415,27 +418,27 @@ export default function ResultScreen() {
         </Text>
 
         <View style={styles.highlightBox}>
-  <Image source={SKIN_TYPES[skinType].image} style={styles.skinImage} />
+          <Image source={SKIN_TYPES[skinType].image} style={styles.skinImage} />
 
-  <View style={{ flex: 1 }}>
-    <Text style={styles.shapeName}>𝐒𝐊𝐈𝐍 𝐓𝐘𝐏𝐄</Text>
-    <View style={{ height: 4 }} />
-    <Text style={styles.shapeName}>{SKIN_TYPES[skinType].name}</Text>
-    <View style={{ height: 6 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.shapeName}>𝐒𝐊𝐈𝐍 𝐓𝐘𝐏𝐄</Text>
+            <View style={{ height: 4 }} />
+            <Text style={styles.shapeName}>{SKIN_TYPES[skinType].name}</Text>
+            <View style={{ height: 6 }} />
 
-    <Text style={styles.shapeDesc}>
-      {SKIN_TYPE_DESCRIPTIONS[skinType]}
-    </Text>
-  </View>
-</View>
+            <Text style={styles.shapeDesc}>
+              {SKIN_TYPE_DESCRIPTIONS[skinType]}
+            </Text>
+          </View>
+        </View>
 
         <Text style={styles.sectionTitle}>Skin Concerns ‼</Text>
-       <View style={{ marginTop: -10 }}></View>
+        <View style={{ marginTop: -10 }}></View>
         <ScrollView
-  horizontal
-  showsHorizontalScrollIndicator={false}
-  contentContainerStyle={{ paddingVertical: 6 }}
->
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingVertical: 6 }}
+        >
           {SKIN_CONCERNS[skinType]?.map((c, i) => (
             <View key={i} style={styles.flashcard}>
               <Text style={styles.flashcardTitle}>{c.title}</Text>
@@ -510,9 +513,74 @@ export default function ResultScreen() {
             );
           })}
         </ScrollView>
+
+        {/* Share actions */}
+        <View style={styles.shareRow}>
+          <TouchableOpacity style={styles.shareButton} onPress={() => handleEmailShare(skinType)}>
+            <Ionicons name="mail-outline" size={20} color="#2C2C2C" />
+            <Text style={styles.shareButtonText}>Share on Email</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.shareButton} onPress={() => handleDownloadPdf(skinType)}>
+            <Ionicons name="document-text-outline" size={20} color="#2C2C2C" />
+            <Text style={styles.shareButtonText}>Download PDF</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+function handleEmailShare(skinType) {
+  if (!skinType) return;
+  const subject = encodeURIComponent("My Skincare Analysis - MatchMyTone");
+  let body = `My Skincare Analysis - MatchMyTone%0D%0A%0D%0A`;
+  body += `Skin Type: ${encodeURIComponent(SKIN_TYPES[skinType].name)}%0D%0A%0D%0A`;
+  body += `${encodeURIComponent(SKIN_TYPE_DESCRIPTIONS[skinType])}%0D%0A%0D%0A`;
+  body += `Key Concerns:%0D%0A`;
+  (SKIN_CONCERNS[skinType] || []).forEach((c, i) => {
+    body += `${i + 1}. ${encodeURIComponent(c.title)} - ${encodeURIComponent(c.description)}%0D%0A`;
+  });
+  body += `%0D%0A✨ Discovered with MatchMyTone ✨`;
+
+  const mailto = `mailto:?subject=${subject}&body=${body}`;
+  Linking.openURL(mailto).catch(() => { });
+}
+
+async function handleDownloadPdf(skinType) {
+  if (!skinType) return;
+
+  const concernsHtml = (SKIN_CONCERNS[skinType] || [])
+    .map(
+      (c) => `
+      <li style="margin-bottom:6px;">
+        <strong>${c.title}</strong> – ${c.description}
+      </li>`
+    )
+    .join("");
+
+  const html = `
+    <html>
+      <body style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding:24px; background:#FFF8E7;">
+        <h1 style="font-size:24px; margin-bottom:4px; color:#2C2C2C;">MatchMyTone – Skincare Analysis</h1>
+        <p style="margin-top:0; color:#C24C4A; font-weight:600;">Your personalised skincare report ✨</p>
+
+        <h2 style="font-size:18px; margin-top:24px; margin-bottom:8px;">Skin Type</h2>
+        <p style="font-size:16px; font-weight:700; margin:0;">${SKIN_TYPES[skinType].name}</p>
+        <p style="margin-top:6px; font-size:14px; color:#555;">${SKIN_TYPE_DESCRIPTIONS[skinType]}</p>
+
+        <h2 style="font-size:18px; margin-top:24px; margin-bottom:8px;">Key Concerns</h2>
+        <ul style="padding-left:18px; margin-top:0;">${concernsHtml}</ul>
+
+        <p style="margin-top:32px; font-size:13px; color:#777;">Generated with love by MatchMyTone ✨</p>
+      </body>
+    </html>
+  `;
+
+  const { uri } = await Print.printToFileAsync({ html });
+  await shareAsync(uri, {
+    mimeType: "application/pdf",
+    dialogTitle: "Share your Skincare Analysis PDF",
+  });
 }
 
 /* ---------- STYLES ---------- */
@@ -533,29 +601,29 @@ const styles = StyleSheet.create({
   },
 
   skinImage: { width: 100, height: 120, marginRight: 16 },
-  shapeName: { fontSize: 16, fontWeight: "800",color: "#A46B39" },
+  shapeName: { fontSize: 16, fontWeight: "800", color: "#A46B39" },
   shapeDesc: { fontSize: 13 },
 
   sectionTitle: { fontSize: 18, fontWeight: "700", marginVertical: 16 },
 
   flashcard: {
-  backgroundColor: "#FFFFFF",
-  borderRadius: 14,
-  padding: 16,
-  marginRight: 10,
-  marginVertical: 4,
-  width: 220,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    padding: 16,
+    marginRight: 10,
+    marginVertical: 4,
+    width: 220,
 
-  borderLeftWidth: 5,
-  borderLeftColor: "#F5B971",
+    borderLeftWidth: 5,
+    borderLeftColor: "#F5B971",
 
-  shadowColor: "#000",
-  shadowOffset: { width: 0, height: 0.5 },
-  shadowOpacity: 0.06,
-  shadowRadius: 1.5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 0.5 },
+    shadowOpacity: 0.06,
+    shadowRadius: 1.5,
 
-  elevation: 1,
-},
+    elevation: 1,
+  },
 
   flashcardTitle: { fontWeight: "700" },
   flashcardDesc: { fontSize: 13 },
@@ -620,7 +688,7 @@ const styles = StyleSheet.create({
   },
 
   whyTitle: { fontWeight: "700", fontSize: 16 },
-  
+
   whyText: { fontSize: 13 },
   container: {
     flex: 1,
@@ -631,5 +699,28 @@ const styles = StyleSheet.create({
   loadingText: {
     fontSize: 16,
     color: '#6B6B6B',
+  },
+  shareRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 16,
+  },
+  shareButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    marginHorizontal: 4,
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "rgba(184,144,24,0.35)",
+    gap: 6,
+  },
+  shareButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#2C2C2C",
   },
 });

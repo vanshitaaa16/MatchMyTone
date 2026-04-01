@@ -4,11 +4,19 @@ from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from datetime import timedelta
 import os
+import uuid
+import resend
 from dotenv import load_dotenv
 from models import db, User, QuizResult, ColorAnalysisResult
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 
 load_dotenv()
+
+# Configure Resend
+resend.api_key = os.getenv('RESEND_API_KEY', '')
+FROM_EMAIL = os.getenv('FROM_EMAIL', 'MatchMyTone <noreply@matchmytone.online>')
+BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:5000')
 
 app = Flask(__name__)
 
@@ -32,6 +40,69 @@ CORS(app, resources={r"/api/*": {"origins": "*", "methods": ["GET", "POST", "PUT
 # Create tables
 with app.app_context():
     db.create_all()
+    # Lightweight schema safety: add new columns if DB already has older table.
+    try:
+        db.session.execute(text("ALTER TABLE color_analysis_results ADD COLUMN IF NOT EXISTS skin_age INTEGER;"))
+        db.session.execute(text("ALTER TABLE color_analysis_results ADD COLUMN IF NOT EXISTS skin_age_description TEXT;"))
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        print("[DB] Warning: could not auto-migrate color_analysis_results skin_age columns:", e)
+    
+    # Add email verification columns if missing
+    try:
+        db.session.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE;"))
+        db.session.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_token VARCHAR(100);"))
+        db.session.commit()
+        print("[DB] Email verification columns ensured")
+    except Exception as e:
+        db.session.rollback()
+        print("[DB] Warning: could not auto-migrate email verification columns:", e)
+
+    # Drop unique constraint so multiple results per user per quiz type can be stored
+    try:
+        db.session.execute(text("ALTER TABLE quiz_results DROP CONSTRAINT IF EXISTS unique_user_quiz;"))
+        db.session.commit()
+        print("[DB] Dropped unique_user_quiz constraint (if it existed)")
+    except Exception as e:
+        db.session.rollback()
+        print("[DB] Warning: could not drop unique_user_quiz constraint:", e)
+
+
+# ==================== EMAIL HELPER ====================
+
+def generate_verification_token():
+    """Generate a unique verification token."""
+    return uuid.uuid4().hex
+
+def send_verification_email(email, token):
+    """Send a verification link email via Resend."""
+    try:
+        verify_url = f"{BACKEND_URL}/api/auth/verify-email?token={token}"
+        params = {
+            "from": FROM_EMAIL,
+            "to": [email],
+            "subject": "Verify your MatchMyTone account",
+            "html": f"""
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #FFF8E7; border-radius: 16px;">
+                <h1 style="color: #2C2C2C; font-size: 24px; text-align: center; margin-bottom: 8px;">MatchMyTone</h1>
+                <p style="color: #6B6B6B; text-align: center; font-size: 14px; margin-bottom: 24px;">Verify your email address</p>
+                <div style="background: #FFFFFF; border-radius: 12px; padding: 24px; text-align: center; border: 1px solid #EAD9A1;">
+                    <p style="color: #4F4F4F; font-size: 14px; margin-bottom: 20px;">Click the button below to verify your email and activate your account:</p>
+                    <a href="{verify_url}" style="display: inline-block; padding: 14px 32px; background: #C24C4A; color: #FFFFFF; text-decoration: none; border-radius: 10px; font-weight: 700; font-size: 16px;">Verify My Email</a>
+                    <p style="color: #8A7F70; font-size: 12px; margin-top: 20px;">Or copy and paste this link in your browser:</p>
+                    <p style="color: #A46B39; font-size: 11px; word-break: break-all;">{verify_url}</p>
+                </div>
+                <p style="color: #A46B39; text-align: center; font-size: 12px; margin-top: 20px;">If you didn't create an account, you can safely ignore this email.</p>
+            </div>
+            """
+        }
+        email_response = resend.Emails.send(params)
+        print(f"[EMAIL] Verification email sent to {email}: {email_response}")
+        return True
+    except Exception as e:
+        print(f"[EMAIL] Error sending verification email to {email}: {e}")
+        return False
 
 # ==================== AUTHENTICATION ENDPOINTS ====================
 
@@ -39,7 +110,6 @@ with app.app_context():
 def register():
     try:
         print(f"[REGISTER] Received request from {request.remote_addr}")
-        print(f"[REGISTER] Headers: {dict(request.headers)}")
         data = request.get_json()
         print(f"[REGISTER] Data: {data}")
         
@@ -75,7 +145,10 @@ def register():
         # Hash password
         hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
         
-        # Create new user
+        # Generate verification token
+        token = generate_verification_token()
+        
+        # Create new user (unverified)
         new_user = User(
             name=data['name'],
             email=data['email'].lower(),
@@ -83,16 +156,17 @@ def register():
             password=hashed_password,
             gender=data['gender'],
             dob=data['dob'],
-            age=data['age']
+            age=data['age'],
+            is_verified=False,
+            verification_token=token
         )
         
         db.session.add(new_user)
         db.session.commit()
         
-        # Create access token
-        access_token = create_access_token(identity=str(new_user.id))
+        # Send verification email via Resend
+        email_sent = send_verification_email(new_user.email, token)
         
-        # Return user data (without password)
         user_data = {
             'id': new_user.id,
             'name': new_user.name,
@@ -101,10 +175,14 @@ def register():
             'gender': new_user.gender,
             'dob': new_user.dob,
             'age': new_user.age,
-            'token': access_token
+            'is_verified': False
         }
         
-        return jsonify({'message': 'Registration successful', 'user': user_data}), 201
+        msg = 'Registration successful! Please check your email and click the verification link.'
+        if not email_sent:
+            msg = 'Registration successful but could not send verification email. Please try again from the login page.'
+        
+        return jsonify({'message': msg, 'user': user_data, 'requires_verification': True}), 201
         
     except IntegrityError:
         db.session.rollback()
@@ -113,13 +191,90 @@ def register():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/auth/verify-email', methods=['GET'])
+def verify_email():
+    """Verify user email via link click — returns an HTML success/error page."""
+    token = request.args.get('token', '').strip()
+    
+    if not token:
+        return '<h2>Invalid verification link.</h2>', 400
+    
+    user = User.query.filter_by(verification_token=token).first()
+    
+    if not user:
+        return """
+        <html><body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #FFF8E7;">
+            <div style="text-align: center; padding: 40px; background: white; border-radius: 16px; border: 1px solid #EAD9A1;">
+                <h1 style="color: #C24C4A;">❌ Invalid Link</h1>
+                <p style="color: #6B6B6B;">This verification link is invalid or has already been used.</p>
+            </div>
+        </body></html>
+        """, 400
+    
+    if user.is_verified:
+        return """
+        <html><body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #FFF8E7;">
+            <div style="text-align: center; padding: 40px; background: white; border-radius: 16px; border: 1px solid #EAD9A1;">
+                <h1 style="color: #2C2C2C;">✅ Already Verified</h1>
+                <p style="color: #6B6B6B;">Your email is already verified. You can log in to MatchMyTone.</p>
+            </div>
+        </body></html>
+        """, 200
+    
+    # Mark as verified and clear token
+    user.is_verified = True
+    user.verification_token = None
+    db.session.commit()
+    
+    return f"""
+    <html><body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #FFF8E7;">
+        <div style="text-align: center; padding: 40px; background: white; border-radius: 16px; border: 1px solid #EAD9A1;">
+            <h1 style="color: #2C2C2C;">✅ Email Verified!</h1>
+            <p style="color: #6B6B6B; font-size: 16px;">Welcome, <strong>{user.name}</strong>!</p>
+            <p style="color: #4F4F4F;">Your email has been verified. You can now log in to MatchMyTone.</p>
+        </div>
+    </body></html>
+    """, 200
+
+
+@app.route('/api/auth/resend-verification', methods=['POST'])
+def resend_verification():
+    """Resend verification email with a new link."""
+    try:
+        data = request.get_json()
+        email = data.get('email', '').lower().strip()
+        
+        if not email:
+            return jsonify({'error': 'Email is required'}), 400
+        
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        if user.is_verified:
+            return jsonify({'message': 'Email already verified. You can log in.'}), 200
+        
+        # Generate new token and send email
+        new_token = generate_verification_token()
+        user.verification_token = new_token
+        db.session.commit()
+        
+        email_sent = send_verification_email(email, new_token)
+        
+        if email_sent:
+            return jsonify({'message': 'Verification link sent to your email.'}), 200
+        else:
+            return jsonify({'error': 'Could not send verification email. Please try again.'}), 500
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     try:
         print(f"[LOGIN] Received request from {request.remote_addr}")
-        print(f"[LOGIN] Headers: {dict(request.headers)}")
         data = request.get_json()
-        print(f"[LOGIN] Data: {data}")
         
         if not data.get('name') or not data.get('password'):
             return jsonify({'error': 'Username and password are required'}), 400
@@ -129,6 +284,14 @@ def login():
         
         if not user or not bcrypt.check_password_hash(user.password, data['password']):
             return jsonify({'error': 'Invalid credentials'}), 401
+        
+        # Check if email is verified
+        if not user.is_verified:
+            return jsonify({
+                'error': 'Please verify your email before logging in.',
+                'requires_verification': True,
+                'email': user.email
+            }), 403
         
         # Create access token
         access_token = create_access_token(identity=str(user.id))
@@ -142,6 +305,7 @@ def login():
             'gender': user.gender,
             'dob': user.dob,
             'age': user.age,
+            'is_verified': True,
             'token': access_token
         }
         
@@ -189,31 +353,21 @@ def update_profile():
         
         data = request.get_json()
         
-        # Validate required fields
-        if not data.get('email') or not data.get('phone') or not data.get('gender') or not data.get('dob'):
+        # Validate required fields (email and username cannot be changed)
+        if not data.get('phone') or not data.get('gender') or not data.get('dob'):
             return jsonify({'error': 'All fields are required'}), 400
         
         # Validate phone number
         if len(data['phone']) != 10:
             return jsonify({'error': 'Phone number must be exactly 10 digits'}), 400
         
-        # Validate email format
-        if '@' not in data['email'] or (not data['email'].endswith('.com') and not data['email'].endswith('.in')):
-            return jsonify({'error': 'Email must contain @ and end with .com or .in'}), 400
-        
-        # Check for duplicates (excluding current user)
-        if data['email'].lower() != user.email.lower():
-            existing_email = User.query.filter(User.email == data['email'].lower()).filter(User.id != user.id).first()
-            if existing_email:
-                return jsonify({'error': 'This email address is already registered.'}), 400
-        
+        # Check for phone duplicate (excluding current user)
         if data['phone'] != user.phone:
             existing_phone = User.query.filter(User.phone == data['phone']).filter(User.id != user.id).first()
             if existing_phone:
                 return jsonify({'error': 'This phone number is already registered.'}), 400
         
-        # Update user data (username cannot be changed)
-        user.email = data['email'].lower()
+        # Update user data (username and email cannot be changed)
         user.phone = data['phone']
         user.gender = data['gender']
         user.dob = data['dob']
@@ -252,27 +406,16 @@ def save_skincare_result():
         if not data.get('answers'):
             return jsonify({'error': 'Answers are required'}), 400
         
-        # Check if result already exists for this user
-        existing_result = QuizResult.query.filter_by(
+        # Always create a new result (save all attempts)
+        new_result = QuizResult(
             user_id=user_id,
-            quiz_type='skincare'
-        ).first()
-        
-        if existing_result:
-            existing_result.answers = data['answers']
-            existing_result.result = data.get('result', '')
-            db.session.commit()
-            return jsonify({'message': 'Skincare result updated successfully', 'result': existing_result.to_dict()}), 200
-        else:
-            new_result = QuizResult(
-                user_id=user_id,
-                quiz_type='skincare',
-                answers=data['answers'],
-                result=data.get('result', '')
-            )
-            db.session.add(new_result)
-            db.session.commit()
-            return jsonify({'message': 'Skincare result saved successfully', 'result': new_result.to_dict()}), 201
+            quiz_type='skincare',
+            answers=data['answers'],
+            result=data.get('result', '')
+        )
+        db.session.add(new_result)
+        db.session.commit()
+        return jsonify({'message': 'Skincare result saved successfully', 'result': new_result.to_dict()}), 201
         
     except Exception as e:
         db.session.rollback()
@@ -288,26 +431,16 @@ def save_body_shape_result():
         if not data.get('answers'):
             return jsonify({'error': 'Answers are required'}), 400
         
-        existing_result = QuizResult.query.filter_by(
+        # Always create a new result (save all attempts)
+        new_result = QuizResult(
             user_id=user_id,
-            quiz_type='body_shape'
-        ).first()
-        
-        if existing_result:
-            existing_result.answers = data['answers']
-            existing_result.result = data.get('result', '')
-            db.session.commit()
-            return jsonify({'message': 'Body shape result updated successfully', 'result': existing_result.to_dict()}), 200
-        else:
-            new_result = QuizResult(
-                user_id=user_id,
-                quiz_type='body_shape',
-                answers=data['answers'],
-                result=data.get('result', '')
-            )
-            db.session.add(new_result)
-            db.session.commit()
-            return jsonify({'message': 'Body shape result saved successfully', 'result': new_result.to_dict()}), 201
+            quiz_type='body_shape',
+            answers=data['answers'],
+            result=data.get('result', '')
+        )
+        db.session.add(new_result)
+        db.session.commit()
+        return jsonify({'message': 'Body shape result saved successfully', 'result': new_result.to_dict()}), 201
         
     except Exception as e:
         db.session.rollback()
@@ -323,26 +456,16 @@ def save_face_shape_result():
         if not data.get('answers'):
             return jsonify({'error': 'Answers are required'}), 400
         
-        existing_result = QuizResult.query.filter_by(
+        # Always create a new result (save all attempts)
+        new_result = QuizResult(
             user_id=user_id,
-            quiz_type='face_shape'
-        ).first()
-        
-        if existing_result:
-            existing_result.answers = data['answers']
-            existing_result.result = data.get('result', '')
-            db.session.commit()
-            return jsonify({'message': 'Face shape result updated successfully', 'result': existing_result.to_dict()}), 200
-        else:
-            new_result = QuizResult(
-                user_id=user_id,
-                quiz_type='face_shape',
-                answers=data['answers'],
-                result=data.get('result', '')
-            )
-            db.session.add(new_result)
-            db.session.commit()
-            return jsonify({'message': 'Face shape result saved successfully', 'result': new_result.to_dict()}), 201
+            quiz_type='face_shape',
+            answers=data['answers'],
+            result=data.get('result', '')
+        )
+        db.session.add(new_result)
+        db.session.commit()
+        return jsonify({'message': 'Face shape result saved successfully', 'result': new_result.to_dict()}), 201
         
     except Exception as e:
         db.session.rollback()
@@ -354,16 +477,24 @@ def get_quiz_results():
     try:
         user_id = get_jwt_identity()
         
-        results = QuizResult.query.filter_by(user_id=user_id).all()
+        # Get ALL quiz results grouped by type (newest first)
+        all_quiz_results = QuizResult.query.filter_by(user_id=user_id).order_by(QuizResult.created_at.desc()).all()
+        all_color_results = ColorAnalysisResult.query.filter_by(user_id=user_id).order_by(ColorAnalysisResult.created_at.desc()).all()
         
+        # Group quiz results by type as lists
         results_data = {
-            'skincare': None,
-            'body_shape': None,
-            'face_shape': None
+            'skincare': [],
+            'body_shape': [],
+            'face_shape': [],
+            'color_analysis': []
         }
         
-        for result in results:
-            results_data[result.quiz_type] = result.to_dict()
+        for result in all_quiz_results:
+            if result.quiz_type in results_data:
+                results_data[result.quiz_type].append(result.to_dict())
+
+        for color_result in all_color_results:
+            results_data['color_analysis'].append(color_result.to_dict())
         
         return jsonify({'results': results_data}), 200
         
@@ -381,42 +512,42 @@ def save_color_analysis_result():
         if 'is_face' not in data:
             return jsonify({'error': 'is_face field is required'}), 400
         
-        # Check if result already exists for this user
-        existing_result = ColorAnalysisResult.query.filter_by(user_id=user_id).order_by(ColorAnalysisResult.created_at.desc()).first()
-        
-        if existing_result:
-            # Update existing result
-            existing_result.photo_uri = data.get('photo_uri', existing_result.photo_uri)
-            existing_result.season_type = data.get('season_type')
-            existing_result.season_description = data.get('season_description')
-            existing_result.undertone = data.get('undertone')
-            existing_result.undertone_description = data.get('undertone_description')
-            existing_result.colors_to_wear = data.get('colors_to_wear', [])
-            existing_result.colors_to_avoid = data.get('colors_to_avoid', [])
-            existing_result.is_face = data.get('is_face', True)
-            existing_result.description = data.get('description')
-            db.session.commit()
-            return jsonify({'message': 'Color analysis result updated successfully', 'result': existing_result.to_dict()}), 200
-        else:
-            # Create new result
-            new_result = ColorAnalysisResult(
-                user_id=user_id,
-                photo_uri=data.get('photo_uri'),
-                season_type=data.get('season_type'),
-                season_description=data.get('season_description'),
-                undertone=data.get('undertone'),
-                undertone_description=data.get('undertone_description'),
-                colors_to_wear=data.get('colors_to_wear', []),
-                colors_to_avoid=data.get('colors_to_avoid', []),
-                is_face=data.get('is_face', True),
-                description=data.get('description')
-            )
-            db.session.add(new_result)
-            db.session.commit()
-            return jsonify({'message': 'Color analysis result saved successfully', 'result': new_result.to_dict()}), 201
+        # Always create a new result (save all attempts)
+        new_result = ColorAnalysisResult(
+            user_id=user_id,
+            photo_uri=data.get('photo_uri'),
+            season_type=data.get('season_type'),
+            season_description=data.get('season_description'),
+            undertone=data.get('undertone'),
+            undertone_description=data.get('undertone_description'),
+            skin_age=data.get('skin_age'),
+            skin_age_description=data.get('skin_age_description'),
+            colors_to_wear=data.get('colors_to_wear', []),
+            colors_to_avoid=data.get('colors_to_avoid', []),
+            is_face=data.get('is_face', True),
+            description=data.get('description')
+        )
+        db.session.add(new_result)
+        db.session.commit()
+        return jsonify({'message': 'Color analysis result saved successfully', 'result': new_result.to_dict()}), 201
         
     except Exception as e:
         db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/quiz/color-analysis/<int:result_id>', methods=['GET'])
+@jwt_required()
+def get_color_analysis_by_id(result_id):
+    try:
+        user_id = get_jwt_identity()
+        result = ColorAnalysisResult.query.filter_by(id=result_id, user_id=user_id).first()
+        
+        if not result:
+            return jsonify({'message': 'No result found', 'result': None}), 200
+        
+        return jsonify({'result': result.to_dict()}), 200
+        
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/quiz/<quiz_type>', methods=['GET'])
@@ -429,15 +560,21 @@ def get_quiz_result(quiz_type):
         if quiz_type not in valid_types:
             return jsonify({'error': 'Invalid quiz type'}), 400
         
-        result = QuizResult.query.filter_by(
+        if quiz_type == 'color_analysis':
+            # Return all color analysis results
+            results = ColorAnalysisResult.query.filter_by(user_id=user_id).order_by(ColorAnalysisResult.created_at.desc()).all()
+            return jsonify({'results': [r.to_dict() for r in results]}), 200
+        
+        # Return all results for this quiz type (newest first)
+        results = QuizResult.query.filter_by(
             user_id=user_id,
             quiz_type=quiz_type
-        ).first()
+        ).order_by(QuizResult.created_at.desc()).all()
         
-        if not result:
-            return jsonify({'message': 'No result found', 'result': None}), 200
+        if not results:
+            return jsonify({'message': 'No result found', 'results': []}), 200
         
-        return jsonify({'result': result.to_dict()}), 200
+        return jsonify({'results': [r.to_dict() for r in results]}), 200
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500

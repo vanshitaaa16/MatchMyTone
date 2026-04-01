@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS color_analysis_results (
     season_description TEXT,
     undertone VARCHAR(50),
     undertone_description TEXT,
+    skin_age INTEGER,
+    skin_age_description TEXT,
     colors_to_wear JSONB,
     colors_to_avoid JSONB,
     is_face BOOLEAN DEFAULT TRUE,
@@ -16,6 +18,10 @@ CREATE TABLE IF NOT EXISTS color_analysis_results (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- If the table already exists, add new columns safely
+ALTER TABLE color_analysis_results ADD COLUMN IF NOT EXISTS skin_age INTEGER;
+ALTER TABLE color_analysis_results ADD COLUMN IF NOT EXISTS skin_age_description TEXT;
 
 -- Create index on user_id for faster queries
 CREATE INDEX IF NOT EXISTS idx_color_analysis_user_id ON color_analysis_results(user_id);

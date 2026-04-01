@@ -44,10 +44,10 @@ export default function SelfieScreen() {
       ]).start(() => {
         // Update index
         setCurrentInstructionIndex((prev) => (prev + 1) % instructions.length);
-        
+
         // Reset position
         slideAnim.setValue(20);
-        
+
         // Fade in
         Animated.parallel([
           Animated.timing(fadeAnim, {
@@ -289,4 +289,3 @@ const styles = StyleSheet.create({
     width: 1,
   },
 });
-

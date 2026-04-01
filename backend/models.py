@@ -15,6 +15,8 @@ class User(db.Model):
     gender = db.Column(db.String(20))
     dob = db.Column(db.String(20))
     age = db.Column(db.Integer)
+    is_verified = db.Column(db.Boolean, default=False, nullable=False)
+    verification_token = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -45,8 +47,7 @@ class QuizResult(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Unique constraint: one result per quiz type per user
-    __table_args__ = (db.UniqueConstraint('user_id', 'quiz_type', name='unique_user_quiz'),)
+    # Allow multiple results per quiz type per user (no unique constraint)
     
     def to_dict(self):
         return {
@@ -69,6 +70,8 @@ class ColorAnalysisResult(db.Model):
     season_description = db.Column(db.Text)
     undertone = db.Column(db.String(50))
     undertone_description = db.Column(db.Text)
+    skin_age = db.Column(db.Integer)
+    skin_age_description = db.Column(db.Text)
     colors_to_wear = db.Column(db.JSON)  # Array of {name, hex}
     colors_to_avoid = db.Column(db.JSON)  # Array of {name, hex}
     is_face = db.Column(db.Boolean, default=True)
@@ -88,6 +91,8 @@ class ColorAnalysisResult(db.Model):
             'season_description': self.season_description,
             'undertone': self.undertone,
             'undertone_description': self.undertone_description,
+            'skin_age': self.skin_age,
+            'skin_age_description': self.skin_age_description,
             'colors_to_wear': self.colors_to_wear,
             'colors_to_avoid': self.colors_to_avoid,
             'is_face': self.is_face,

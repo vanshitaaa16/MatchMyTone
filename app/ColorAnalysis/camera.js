@@ -50,7 +50,7 @@ export default function CameraScreen() {
       const timestamp = new Date().getTime();
       const filename = `selfie_${timestamp}.jpg`;
       const fileUri = `${FileSystem.documentDirectory}${filename}`;
-      
+
       await FileSystem.moveAsync({
         from: photo.uri,
         to: fileUri,
@@ -108,7 +108,7 @@ export default function CameraScreen() {
         style={StyleSheet.absoluteFill}
         facing="front"
       />
-      
+
       <SafeAreaView style={styles.safeArea}>
         {/* Back Button */}
         <TouchableOpacity

@@ -9,8 +9,8 @@ const getApiBaseUrl = () => {
     if (Platform.OS === 'android') {
       // Using your computer's actual IP address that backend is running on
       // Backend shows: Running on http://192.168.25.205:5000
-      return 'http://192.168.25.205:5000/api';
-      
+      return 'http://172.29.205.205:5000/api';
+
       // If above doesn't work, try Android emulator standard IP:
       // return 'http://10.0.2.2:5000/api';
     } else if (Platform.OS === 'ios') {
@@ -66,11 +66,11 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
   try {
     const url = `${API_BASE_URL}${endpoint}`;
     console.log(`Making ${method} request to: ${url}`);
-    
+
     // Create abort controller for timeout
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
-    
+
     const options = {
       method,
       headers: {
@@ -93,12 +93,12 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
 
     console.log('Sending request...');
     console.log('Request URL:', url);
-    
+
     let response;
     try {
       response = await Promise.race([
         fetch(url, options),
-        new Promise((_, reject) => 
+        new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Request timeout after 10 seconds')), 10000)
         )
       ]);
@@ -112,7 +112,7 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
       }
       throw fetchError;
     }
-    
+
     // Handle non-JSON responses
     let result;
     const contentType = response.headers.get('content-type');
@@ -135,7 +135,7 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
     if (!response.ok) {
       // Try to extract error message from response
       let errorMsg = result?.error || result?.message || result?.msg || `Request failed with status ${response.status}`;
-      
+
       // Handle specific HTTP status codes
       if (response.status === 401) {
         errorMsg = result?.error || result?.message || result?.msg || 'Invalid credentials. Please check your username and password.';
@@ -147,11 +147,14 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
       } else if (response.status === 500) {
         errorMsg = result?.error || result?.message || result?.msg || 'Server error. Please try again later.';
         console.error('Server error:', errorMsg);
-      } else {
-        // Only use console.error for unexpected errors
+      } else if (response.status >= 500) {
+        // Only use console.error for server errors
         console.error('Request failed:', errorMsg);
         console.error('Response status:', response.status);
         console.error('Response data:', result);
+      } else {
+        // Use console.warn for client errors (400, 409, etc.) — expected validation errors
+        console.warn('Request failed:', errorMsg);
       }
       throw new Error(errorMsg);
     }
@@ -159,18 +162,14 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
     console.log('Request successful, returning result');
     return result;
   } catch (error) {
-    // Only log unexpected errors to avoid LogBox for expected errors
-    if (!error.message || (!error.message.includes('Invalid credentials') && !error.message.includes('credentials'))) {
-      console.error('API Request Error:', error);
-      console.error('Error name:', error.name);
-      console.error('Error message:', error.message);
-    }
-    
+    // Use console.warn for all caught errors to avoid LogBox red popups
+    console.warn('API Request Error:', error?.message || error);
+
     // If error already has a message from server, use it
     if (error.message && !error.message.includes('AbortError') && !error.message.includes('Network request failed') && !error.message.includes('Failed to fetch')) {
       throw error; // Re-throw server error messages as-is
     }
-    
+
     // Provide more helpful error messages for network issues
     if (error.name === 'AbortError') {
       throw new Error('Request timed out. Please check your network connection and try again.');
@@ -191,30 +190,22 @@ export const authAPI = {
       console.log('Register API call with data:', { ...userData, password: '***' });
       const response = await makeRequest('/auth/register', 'POST', userData, false);
       console.log('Register API response received:', JSON.stringify(response, null, 2));
-      
-      if (response) {
-        const user = response.user || response;
-        if (user) {
-          if (user.token || response.token) {
-            const token = user.token || response.token;
-            await setToken(token);
-            console.log('Token stored successfully');
-          } else {
-            console.warn('No token in response');
-          }
-          // Store user data
-          await AsyncStorage.setItem('currentUser', JSON.stringify(user));
-          console.log('User data stored successfully');
-        } else {
-          console.warn('No user data in response:', response);
-        }
-      } else {
-        console.warn('Empty response received');
-      }
+      // No token is returned during registration — user must verify email first
       return response;
     } catch (error) {
-      console.error('Register API error:', error);
-      console.error('Error message:', error.message);
+      console.warn('Register API error:', error?.message || error);
+      throw error;
+    }
+  },
+
+  // Resend verification email link
+  resendVerification: async (email) => {
+    try {
+      console.log('Resend verification for:', email);
+      const response = await makeRequest('/auth/resend-verification', 'POST', { email }, false);
+      return response;
+    } catch (error) {
+      console.warn('Resend verification error:', error?.message || error);
       throw error;
     }
   },
@@ -225,7 +216,7 @@ export const authAPI = {
       console.log('Login API call with username:', name);
       const response = await makeRequest('/auth/login', 'POST', { name, password }, false);
       console.log('Login API response received:', JSON.stringify(response, null, 2));
-      
+
       if (response) {
         const user = response.user || response;
         if (user) {
@@ -247,8 +238,8 @@ export const authAPI = {
       }
       return response;
     } catch (error) {
-      console.error('Login API error:', error);
-      console.error('Error message:', error.message);
+      // Use console.warn to avoid LogBox red popup for expected auth errors
+      console.warn('Login API error:', error?.message || error);
       throw error;
     }
   },
@@ -362,6 +353,16 @@ export const quizAPI = {
   saveColorAnalysisResult: async (resultData) => {
     try {
       const response = await makeRequest('/quiz/color-analysis', 'POST', resultData);
+      return response;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Get a specific color analysis result by ID
+  getColorAnalysisById: async (resultId) => {
+    try {
+      const response = await makeRequest(`/quiz/color-analysis/${resultId}`, 'GET');
       return response;
     } catch (error) {
       throw error;
