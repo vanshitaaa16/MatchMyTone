@@ -9,7 +9,7 @@ const getApiBaseUrl = () => {
     if (Platform.OS === 'android') {
       // Using your computer's actual IP address that backend is running on
       // Backend shows: Running on http://192.168.25.205:5000
-      return 'http://172.29.205.205:5000/api';
+      return 'https://matchmytone.onrender.com/api';
 
       // If above doesn't work, try Android emulator standard IP:
       // return 'http://10.0.2.2:5000/api';
@@ -99,7 +99,7 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
       response = await Promise.race([
         fetch(url, options),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Request timeout after 10 seconds')), 10000)
+          setTimeout(() => reject(new Error('Request timeout after 60 seconds')), 60000)
         )
       ]);
       clearTimeout(timeoutId); // Clear timeout if request completes

@@ -16,7 +16,7 @@ load_dotenv()
 # Configure Resend
 resend.api_key = os.getenv('RESEND_API_KEY', '')
 FROM_EMAIL = os.getenv('FROM_EMAIL', 'MatchMyTone <noreply@matchmytone.online>')
-BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:5000')
+BACKEND_URL = os.getenv('BACKEND_URL', 'https://matchmytone.onrender.com')
 
 app = Flask(__name__)
 
@@ -81,6 +81,11 @@ with app.app_context():
     except Exception as e:
         db.session.rollback()
         print("[DB] Warning: could not drop unique_user_quiz constraint:", e)
+    
+    # Close the master process's DB connection pool so that forked gunicorn
+    # workers each create their own fresh SSL connections to PostgreSQL.
+    db.engine.dispose()
+    print("[DB] Connection pool disposed (workers will create fresh connections)")
 
 
 # ==================== EMAIL HELPER ====================
