@@ -120,8 +120,46 @@ def send_verification_email(email, token):
         print(f"[EMAIL] Verification email sent to {email}: {email_response}")
         return True
     except Exception as e:
+        import traceback
         print(f"[EMAIL] Error sending verification email to {email}: {e}")
+        print(f"[EMAIL] Full traceback: {traceback.format_exc()}")
+        print(f"[EMAIL] Resend API key set: {bool(resend.api_key)}")
+        print(f"[EMAIL] From email: {FROM_EMAIL}")
         return False
+
+
+# Debug endpoint — remove after testing
+@app.route('/api/test-email', methods=['GET'])
+def test_email():
+    """Debug endpoint to test Resend configuration."""
+    api_key_set = bool(resend.api_key) and len(resend.api_key) > 5
+    api_key_preview = resend.api_key[:8] + '...' if api_key_set else 'NOT SET'
+    
+    result = {
+        'resend_api_key_set': api_key_set,
+        'api_key_preview': api_key_preview,
+        'from_email': FROM_EMAIL,
+        'backend_url': BACKEND_URL
+    }
+    
+    # Try sending a test email if ?send=true is passed
+    test_to = request.args.get('send')
+    if test_to:
+        try:
+            params = {
+                "from": FROM_EMAIL,
+                "to": [test_to],
+                "subject": "MatchMyTone Test Email",
+                "html": "<h1>It works!</h1><p>Your Resend integration is configured correctly.</p>"
+            }
+            response = resend.Emails.send(params)
+            result['email_sent'] = True
+            result['resend_response'] = str(response)
+        except Exception as e:
+            result['email_sent'] = False
+            result['error'] = str(e)
+    
+    return jsonify(result), 200
 
 # ==================== AUTHENTICATION ENDPOINTS ====================
 

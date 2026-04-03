@@ -18,7 +18,7 @@ const getApiBaseUrl = () => {
       return 'http://localhost:5000/api';
     } else {
       // Web or other platforms
-      return 'http://localhost:5000/api';
+      return 'https://matchmytone.onrender.com/api';
     }
   } else {
     // Production mode
@@ -61,15 +61,36 @@ const removeToken = async () => {
   }
 };
 
+// Backend warm-up to handle Render cold starts
+let isBackendWarmedUp = false;
+const warmUpBackend = async () => {
+  if (isBackendWarmedUp) return;
+  try {
+    console.log('[WARMUP] Waking up backend (Render cold start)...');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s for cold start
+    await fetch(`${API_BASE_URL}/health`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    isBackendWarmedUp = true;
+    console.log('[WARMUP] Backend is awake!');
+  } catch (e) {
+    console.warn('[WARMUP] Warm-up ping failed:', e.message);
+    // Still proceed — the actual request might work
+  }
+};
+
 // Make API request with authentication
 const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth = true) => {
   try {
+    // Wake up backend if this is the first request (handles Render cold starts)
+    await warmUpBackend();
+
     const url = `${API_BASE_URL}${endpoint}`;
     console.log(`Making ${method} request to: ${url}`);
 
     // Create abort controller for timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
     const options = {
       method,
@@ -99,7 +120,7 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
       response = await Promise.race([
         fetch(url, options),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Request timeout after 60 seconds')), 60000)
+          setTimeout(() => reject(new Error('Request timeout after 15 seconds')), 15000)
         )
       ]);
       clearTimeout(timeoutId); // Clear timeout if request completes
@@ -108,7 +129,7 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
       clearTimeout(timeoutId);
       console.error('Fetch error:', fetchError);
       if (fetchError.message.includes('timeout')) {
-        throw new Error('Request timed out. Backend is not responding. Check: 1) Backend running? 2) Correct IP? 3) Firewall allows port 5000?');
+        throw new Error('Request timed out. The server may be starting up — please try again in a few seconds.');
       }
       throw fetchError;
     }
