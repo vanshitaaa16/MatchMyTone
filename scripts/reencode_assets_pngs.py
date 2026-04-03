@@ -2,40 +2,51 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 
-def reencode_png(path: Path) -> None:
-    img = Image.open(path)
-    img.load()
-    print(f"{path}: mode={img.mode} size={img.size} info={sorted(img.info.keys())}")
+def reencode_png(path: Path) -> bool:
+    try:
+        img = Image.open(path)
+        img.load()
+    except (UnidentifiedImageError, OSError) as exc:
+        print(f"SKIP {path}: unreadable image ({exc})")
+        return False
 
-    # Re-encode to a simple, Android-safe PNG.
-    # This removes problematic metadata/profiles and normalizes to 8-bit RGBA.
+    original_format = (img.format or "").upper()
+    original_info = sorted(img.info.keys())
+    print(
+        f"{path}: format={original_format} mode={img.mode} size={img.size} info={original_info}"
+    )
+
+    # Re-encode every PNG path to a strict PNG payload.
+    # This fixes files that have .png extension but JPEG/JFIF payloads.
     out = img.convert("RGBA")
     out.save(path, format="PNG", optimize=True)
 
     img2 = Image.open(path)
     img2.load()
-    print(f"  -> saved: mode={img2.mode} size={img2.size} info={sorted(img2.info.keys())}")
+    print(
+        f"  -> saved: format={(img2.format or '').upper()} mode={img2.mode} size={img2.size} info={sorted(img2.info.keys())}"
+    )
+    return original_format != "PNG"
 
 
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
-    targets = [
-        root / "assets" / "color1.png",
-        root / "assets" / "matchmytone-logo.png",
-        root / "assets" / "splash-icon.png",
-        root / "assets" / "normal.png",
-    ]
+    assets_dir = root / "assets"
+    changed_non_png_payloads = 0
+    total = 0
 
-    for p in targets:
-        if not p.exists():
-            print("MISSING", p)
-            continue
-        reencode_png(p)
+    for p in sorted(assets_dir.glob("*.png")):
+        total += 1
+        was_non_png_payload = reencode_png(p)
+        if was_non_png_payload:
+            changed_non_png_payloads += 1
 
-    print("DONE")
+    print(
+        f"DONE: processed {total} png files, fixed {changed_non_png_payloads} files with non-PNG payloads."
+    )
 
 
 if __name__ == "__main__":
