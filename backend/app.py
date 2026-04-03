@@ -14,9 +14,10 @@ from sqlalchemy import text
 load_dotenv()
 
 # Configure Resend
-resend.api_key = os.getenv('RESEND_API_KEY', '')
-FROM_EMAIL = os.getenv('FROM_EMAIL', 'MatchMyTone <noreply@matchmytone.online>')
-BACKEND_URL = os.getenv('BACKEND_URL', 'https://matchmytone.onrender.com')
+resend.api_key = (os.getenv('RESEND_API_KEY', '') or '').strip()
+FROM_EMAIL = (os.getenv('FROM_EMAIL', 'MatchMyTone <noreply@matchmytone.online>') or '').strip()
+# Used to build the verification link sent by email.
+BACKEND_URL = (os.getenv('BACKEND_URL', 'https://matchmytone.onrender.com') or '').strip().rstrip('/')
 
 app = Flask(__name__)
 
@@ -300,12 +301,20 @@ def resend_verification():
     """Resend verification email with a new link."""
     try:
         data = request.get_json()
-        email = data.get('email', '').lower().strip()
-        
-        if not email:
+        # Frontend currently sends the login "username" here as `email`.
+        # So, accept both "email" and "name" styles to prevent false "User not found".
+        identity = (data.get('email') or data.get('name') or '').lower().strip()
+
+        if not identity:
             return jsonify({'error': 'Email is required'}), 400
-        
-        user = User.query.filter_by(email=email).first()
+
+        # 1) Try by email
+        user = User.query.filter_by(email=identity).first()
+
+        # 2) If not found and it doesn't look like an email, try by username
+        if not user and '@' not in identity:
+            user = User.query.filter(User.name.ilike(identity)).first()
+
         if not user:
             return jsonify({'error': 'User not found'}), 404
         
@@ -317,7 +326,7 @@ def resend_verification():
         user.verification_token = new_token
         db.session.commit()
         
-        email_sent = send_verification_email(email, new_token)
+        email_sent = send_verification_email(user.email, new_token)
         
         if email_sent:
             return jsonify({'message': 'Verification link sent to your email.'}), 200
