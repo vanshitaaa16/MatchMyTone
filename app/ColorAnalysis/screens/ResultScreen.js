@@ -22,10 +22,46 @@ import { shareAsync } from 'expo-sharing';
 import { analyzeSkinImage } from '../services/colorAnalysisGemini';
 import { GEMINI_API_KEY } from '../geminiConfig';
 import { quizAPI } from '../../../src/api';
+import { SHARE_ON_EMAIL_TO_ENCODED } from '../../../src/shareEmail';
 
 const { width } = Dimensions.get('window');
 const CARD_PADDING = 14;
 const SPARKLE = '✨';
+
+/** Map API row (snake_case) to camelCase for Gemini repeat-analysis anchoring. */
+function mapSavedToPreviousColorAnalysis(saved) {
+  if (!saved) return null;
+  return {
+    seasonType: saved.season_type,
+    seasonDescription: saved.season_description,
+    undertone: saved.undertone,
+    undertoneDescription: saved.undertone_description,
+    skinAge: saved.skin_age,
+    skinAgeDescription: saved.skin_age_description,
+    colorsToWear: saved.colors_to_wear || [],
+    colorsToAvoid: saved.colors_to_avoid || [],
+  };
+}
+
+/** Latest successful on-server analysis for this user (newest first from API). */
+async function loadLatestSuccessfulColorAnalysisForRepeat() {
+  try {
+    const response = await quizAPI.getQuizResult('color_analysis');
+    const results = response?.results || [];
+    const saved = results.find(
+      (r) =>
+        r.is_face &&
+        Array.isArray(r.colors_to_wear) &&
+        r.colors_to_wear.length >= 6 &&
+        Array.isArray(r.colors_to_avoid) &&
+        r.colors_to_avoid.length >= 3
+    );
+    return mapSavedToPreviousColorAnalysis(saved);
+  } catch (e) {
+    console.log('Could not load prior color analysis (ok for first-time):', e);
+    return null;
+  }
+}
 
 export default function ResultScreen() {
   const router = useRouter();
@@ -39,14 +75,13 @@ export default function ResultScreen() {
   const [result, setResult] = useState(null);
   const [selectedColorFilter, setSelectedColorFilter] = useState(null);
   const [userAge, setUserAge] = useState(null);
-  const [userEmail, setUserEmail] = useState('');
   const [userGender, setUserGender] = useState(null);
   const [genderMismatch, setGenderMismatch] = useState(false);
   const [detectedGender, setDetectedGender] = useState(null);
   const [pdfDownloadedOnce, setPdfDownloadedOnce] = useState(false);
 
   useEffect(() => {
-    // Load basic user info for age-based palette + email share
+    // Load basic user info for age-based palette
     loadUserProfileBasics();
 
     if (!photoUri) {
@@ -72,9 +107,6 @@ export default function ResultScreen() {
         if (!Number.isNaN(parsedAge)) {
           setUserAge(parsedAge);
         }
-      }
-      if (user?.email) {
-        setUserEmail(user.email);
       }
       if (user?.gender) {
         setUserGender(user.gender.toLowerCase());
@@ -141,7 +173,27 @@ export default function ResultScreen() {
       const base64 = await FileSystem.readAsStringAsync(photoUri, {
         encoding: FileSystem.EncodingType.Base64,
       });
-      const analysis = await analyzeSkinImage(base64, 'image/jpeg', GEMINI_API_KEY);
+      const previousAnalysis = await loadLatestSuccessfulColorAnalysisForRepeat();
+
+      let registeredGenderForApi = userGender;
+      if (!registeredGenderForApi) {
+        try {
+          const stored = await AsyncStorage.getItem('currentUser');
+          if (stored) {
+            const user = JSON.parse(stored);
+            if (user?.gender) {
+              registeredGenderForApi = user.gender.toLowerCase();
+            }
+          }
+        } catch (e) {
+          console.log('Could not read gender for color analysis:', e);
+        }
+      }
+
+      const analysis = await analyzeSkinImage(base64, 'image/jpeg', GEMINI_API_KEY, {
+        previousAnalysis: previousAnalysis || undefined,
+        registeredGender: registeredGenderForApi || undefined,
+      });
 
       // Check gender mismatch: if face is detected, compare with registered user's gender
       if (analysis.isFace && analysis.detectedGender) {
@@ -252,8 +304,7 @@ export default function ResultScreen() {
     body += `%0D%0A✨ Discovered with MatchMyTone ✨`;
 
     const subject = encodeURIComponent('My Color Analysis - MatchMyTone');
-    const to = userEmail ? encodeURIComponent(userEmail) : '';
-    const mailto = `mailto:${to}?subject=${subject}&body=${body}`;
+    const mailto = `mailto:${SHARE_ON_EMAIL_TO_ENCODED}?subject=${subject}&body=${body}`;
 
     try {
       const canOpen = await Linking.canOpenURL(mailto);

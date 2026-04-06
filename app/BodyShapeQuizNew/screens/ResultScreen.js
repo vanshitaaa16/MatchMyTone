@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { quizAPI } from "../../../src/api";
+import { SHARE_ON_EMAIL_TO_ENCODED } from "../../../src/shareEmail";
 import { useRouter } from "expo-router";
 import { TouchableOpacity, Linking } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -301,7 +302,7 @@ function handleEmailShare(result, shape) {
   });
   body += `%0D%0A✨ Discovered with MatchMyTone ✨`;
 
-  const mailto = `mailto:?subject=${subject}&body=${body}`;
+  const mailto = `mailto:${SHARE_ON_EMAIL_TO_ENCODED}?subject=${subject}&body=${body}`;
   Linking.openURL(mailto).catch(() => { });
 }
 

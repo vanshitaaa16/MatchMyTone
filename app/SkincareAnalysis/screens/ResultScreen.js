@@ -14,6 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { quizAPI } from "../../../src/api";
+import { SHARE_ON_EMAIL_TO_ENCODED } from "../../../src/shareEmail";
 import * as Print from "expo-print";
 import { shareAsync } from "expo-sharing";
 
@@ -542,7 +543,7 @@ function handleEmailShare(skinType) {
   });
   body += `%0D%0A✨ Discovered with MatchMyTone ✨`;
 
-  const mailto = `mailto:?subject=${subject}&body=${body}`;
+  const mailto = `mailto:${SHARE_ON_EMAIL_TO_ENCODED}?subject=${subject}&body=${body}`;
   Linking.openURL(mailto).catch(() => { });
 }
 

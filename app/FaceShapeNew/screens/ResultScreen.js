@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { quizAPI } from "../../../src/api";
+import { SHARE_ON_EMAIL_TO_ENCODED } from "../../../src/shareEmail";
 import { useRouter } from "expo-router";
 import {
   TouchableOpacity,
@@ -219,7 +220,6 @@ export default function ResultScreen() {
   const answersParam = params.answers;
   const answers = answersParam ? (typeof answersParam === 'string' ? JSON.parse(answersParam) : answersParam) : {};
   const [result, setResult] = useState(null);
-  const [userEmail, setUserEmail] = useState("");
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const viewOnly = params?.viewOnly === "true";
 
@@ -264,23 +264,6 @@ export default function ResultScreen() {
     }
   }, [result, answersParam]);
 
-  useEffect(() => {
-    const loadUserEmail = async () => {
-      try {
-        const storedUser = await AsyncStorage.getItem("currentUser");
-        if (storedUser) {
-          const parsed = JSON.parse(storedUser);
-          if (parsed?.email) {
-            setUserEmail(parsed.email);
-          }
-        }
-      } catch (e) {
-        // ignore
-      }
-    };
-    loadUserEmail();
-  }, []);
-
   const handleShareEmail = () => {
     if (!result) return;
     const shape = SHAPE_DATA[result];
@@ -319,8 +302,7 @@ export default function ResultScreen() {
 
     body += "\nDiscovered with MatchMyTone";
 
-    const to = userEmail ? encodeURIComponent(userEmail) : "";
-    const mailtoUrl = `mailto:${to}?subject=${encodeURIComponent(
+    const mailtoUrl = `mailto:${SHARE_ON_EMAIL_TO_ENCODED}?subject=${encodeURIComponent(
       subject
     )}&body=${encodeURIComponent(body)}`;
 

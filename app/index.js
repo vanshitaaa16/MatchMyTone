@@ -1,5 +1,22 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, Pressable, TextInput, ScrollView, Image, Animated, Dimensions, Platform, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Modal,
+  Pressable,
+  TextInput,
+  ScrollView,
+  Image,
+  Animated,
+  Dimensions,
+  Platform,
+  Alert,
+  KeyboardAvoidingView,
+  ActivityIndicator,
+  Keyboard,
+} from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -8,6 +25,8 @@ import { useRouter } from 'expo-router';
 import { authAPI } from '../src/api';
 
 const { width, height } = Dimensions.get('window');
+const REGISTER_MODAL_MAX_HEIGHT = Math.round(height * 0.9);
+const REGISTER_SCROLL_MAX_HEIGHT = Math.max(REGISTER_MODAL_MAX_HEIGHT - 72, 280);
 
 export default function MainScreen() {
   const router = useRouter();
@@ -157,6 +176,11 @@ export default function MainScreen() {
     });
   }, []);
 
+  useEffect(() => {
+    registerModalOpenRef.current = showRegister;
+    if (!showRegister) setIsRegistering(false);
+  }, [showRegister]);
+
   // register state
   const [rName, setRName] = useState('');
   const [rNameError, setRNameError] = useState('');
@@ -172,6 +196,8 @@ export default function MainScreen() {
   const [rError, setRError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const registerModalOpenRef = useRef(false);
 
   // login state
   const [lName, setLName] = useState('');
@@ -224,6 +250,7 @@ export default function MainScreen() {
       return;
     }
 
+    setIsRegistering(true);
     try {
       console.log('Attempting registration...');
       const response = await authAPI.register({
@@ -239,6 +266,7 @@ export default function MainScreen() {
       console.log('Registration response received:', JSON.stringify(response, null, 2));
 
       if (response) {
+        if (!registerModalOpenRef.current) return;
         console.log('Registration successful, showing verification message...');
         // Clear form
         setRName(''); setRNameError(''); setRGender(''); setRPhone(''); setRPhoneError('');
@@ -257,6 +285,8 @@ export default function MainScreen() {
     } catch (error) {
       console.warn('Registration error:', error?.message || error);
       setRError(error.message || 'Registration failed. Please try again.');
+    } finally {
+      setIsRegistering(false);
     }
   };
 
@@ -530,15 +560,53 @@ export default function MainScreen() {
       </ScrollView>
 
       {/* Register Modal */}
-      <Modal transparent visible={showRegister} animationType="slide" onRequestClose={() => setShowRegister(false)}>
-        <View style={styles.overlay} pointerEvents="box-none">
-          <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} onPress={() => setShowRegister(false)} />
-          <View style={styles.modal} pointerEvents="auto">
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Registration</Text>
-              <TouchableOpacity onPress={() => setShowRegister(false)}><Text style={styles.close}>×</Text></TouchableOpacity>
-            </View>
-            <ScrollView>
+      <Modal
+        transparent
+        visible={showRegister}
+        animationType="slide"
+        onRequestClose={() => {
+          if (!isRegistering) setShowRegister(false);
+        }}
+      >
+        <KeyboardAvoidingView
+          style={styles.keyboardAvoidingRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
+        >
+          <View style={styles.registerOverlay} pointerEvents="box-none">
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={() => {
+                if (!isRegistering) {
+                  Keyboard.dismiss();
+                  setShowRegister(false);
+                }
+              }}
+            />
+            <View style={[styles.modal, styles.registerModal]} pointerEvents="auto">
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Registration</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    if (!isRegistering) {
+                      Keyboard.dismiss();
+                      setShowRegister(false);
+                    }
+                  }}
+                  disabled={isRegistering}
+                  accessibilityState={{ disabled: isRegistering }}
+                >
+                  <Text style={[styles.close, isRegistering && styles.closeDisabled]}>×</Text>
+                </TouchableOpacity>
+              </View>
+              <ScrollView
+                style={styles.registerScroll}
+                contentContainerStyle={styles.registerScrollContent}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                showsVerticalScrollIndicator
+                nestedScrollEnabled
+              >
               <View style={styles.formGroup}>
                 <Text style={styles.label}>Username</Text>
                 <TextInput
@@ -848,14 +916,23 @@ export default function MainScreen() {
               {!!rError && <Text style={styles.error}>{rError}</Text>}
               <View style={styles.actionsRow}>
                 <TouchableOpacity
-                  style={[styles.btn, styles.primary]}
+                  style={[styles.btn, styles.primary, isRegistering && styles.btnBusy]}
                   onPress={onRegister}
                   activeOpacity={0.8}
+                  disabled={isRegistering}
                 >
-                  <Text style={[styles.btnText, styles.primaryText]}>Register</Text>
+                  {isRegistering ? (
+                    <View style={styles.registeringRow}>
+                      <ActivityIndicator color="#fff" size="small" />
+                      <Text style={[styles.btnText, styles.primaryText, styles.registeringLabel]}>Registering…</Text>
+                    </View>
+                  ) : (
+                    <Text style={[styles.btnText, styles.primaryText]}>Register</Text>
+                  )}
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.btn, styles.neutral]}
+                  style={[styles.btn, styles.neutral, isRegistering && styles.btnBusy]}
+                  disabled={isRegistering}
                   onPress={() => {
                     setRName(''); setRNameError(''); setRGender(''); setRPhone(''); setRPhoneError(''); setREmail(''); setREmailError(''); setRDob(''); setRAge(''); setRPassword(''); setRConfirm(''); setRError(''); setShowPassword(false); setShowConfirmPassword(false);
                   }}
@@ -863,10 +940,24 @@ export default function MainScreen() {
                   <Text style={[styles.btnText, styles.neutralText]}>Reset</Text>
                 </TouchableOpacity>
               </View>
-              <Text style={styles.footerNote}>Already have an account? <Text onPress={() => { setShowRegister(false); setShowLogin(true); }} style={styles.link}>Login</Text></Text>
+              <Text style={styles.footerNote}>
+                Already have an account?{' '}
+                <Text
+                  onPress={() => {
+                    if (!isRegistering) {
+                      setShowRegister(false);
+                      setShowLogin(true);
+                    }
+                  }}
+                  style={[styles.link, isRegistering && styles.linkDisabled]}
+                >
+                  Login
+                </Text>
+              </Text>
             </ScrollView>
           </View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Login Modal */}
@@ -1045,12 +1136,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
   },
+  registerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'ios' ? 52 : 36,
+    paddingBottom: 16,
+  },
   overlayPressable: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
+  },
+  keyboardAvoidingRoot: {
+    flex: 1,
+    width: '100%',
   },
   modal: {
     backgroundColor: 'rgba(128, 128, 128, 0.85)',
@@ -1062,6 +1166,35 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.3)',
     zIndex: 1000,
+  },
+  registerModal: {
+    maxHeight: REGISTER_MODAL_MAX_HEIGHT,
+    flexShrink: 1,
+  },
+  registerScroll: {
+    maxHeight: REGISTER_SCROLL_MAX_HEIGHT,
+  },
+  registerScrollContent: {
+    paddingBottom: 28,
+    flexGrow: 1,
+  },
+  registeringRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  registeringLabel: {
+    marginLeft: 8,
+  },
+  btnBusy: {
+    opacity: 0.85,
+  },
+  closeDisabled: {
+    opacity: 0.4,
+  },
+  linkDisabled: {
+    opacity: 0.5,
   },
   modalHeader: {
     flexDirection: 'row',
