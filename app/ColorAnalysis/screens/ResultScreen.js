@@ -9,7 +9,6 @@ import {
   Dimensions,
   StatusBar,
   ActivityIndicator,
-  Linking,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -22,7 +21,6 @@ import { shareAsync } from 'expo-sharing';
 import { analyzeSkinImage } from '../services/colorAnalysisGemini';
 import { GEMINI_API_KEY } from '../geminiConfig';
 import { quizAPI } from '../../../src/api';
-import { SHARE_ON_EMAIL_TO_ENCODED } from '../../../src/shareEmail';
 
 const { width } = Dimensions.get('window');
 const CARD_PADDING = 14;
@@ -274,45 +272,25 @@ export default function ResultScreen() {
   const handleEmailShare = async () => {
     if (!result) return;
 
-    let body = `My Color Analysis - MatchMyTone%0D%0A%0D%0A`;
-    body += `Season Type: ${encodeURIComponent(result.seasonType || '—')}%0D%0A`;
-    if (result.seasonDescription) {
-      body += `${encodeURIComponent(result.seasonDescription)}%0D%0A%0D%0A`;
-    }
-    body += `Undertone: ${encodeURIComponent(result.undertone || '—')}%0D%0A`;
-    if (result.undertoneDescription) {
-      body += `${encodeURIComponent(result.undertoneDescription)}%0D%0A%0D%0A`;
-    }
-
-    const displayColors = getAgeAdjustedColorsToWear(result, userAge);
-    if (displayColors.length) {
-      body += `Colors to Wear:%0D%0A`;
-      displayColors.forEach((c, i) => {
-        body += `${i + 1}. ${encodeURIComponent(c.name)} (${c.hex || ''})%0D%0A`;
-      });
-      body += `%0D%0A`;
-    }
-
-    if (result.colorsToAvoid?.length) {
-      body += `Colors to Avoid:%0D%0A`;
-      result.colorsToAvoid.forEach((c, i) => {
-        body += `${i + 1}. ${encodeURIComponent(c.name)} (${c.hex || ''})%0D%0A`;
-      });
-      body += `%0D%0A`;
-    }
-
-    body += `%0D%0A✨ Discovered with MatchMyTone ✨`;
-
-    const subject = encodeURIComponent('My Color Analysis - MatchMyTone');
-    const mailto = `mailto:${SHARE_ON_EMAIL_TO_ENCODED}?subject=${subject}&body=${body}`;
-
     try {
-      const canOpen = await Linking.canOpenURL(mailto);
-      if (canOpen) {
-        Linking.openURL(mailto);
-      }
+      const displayColors = getAgeAdjustedColorsToWear(result, userAge);
+      await quizAPI.shareColorAnalysisByEmail({
+        result: {
+          seasonType: result.seasonType,
+          seasonDescription: result.seasonDescription,
+          undertone: result.undertone,
+          undertoneDescription: result.undertoneDescription,
+          skinAge: result.skinAge,
+          skinAgeDescription: result.skinAgeDescription,
+          colorsToWear: result.colorsToWear,
+          colorsToAvoid: result.colorsToAvoid,
+        },
+        colorsToWearDisplay: displayColors,
+      });
+      Alert.alert('Email sent', 'Check your inbox — it’s from MatchMyTone. You may need to peek in spam.');
     } catch (e) {
-      console.log('Email share failed:', e);
+      const msg = e?.message || 'Could not send email.';
+      Alert.alert('Email not sent', msg);
     }
   };
 

@@ -205,14 +205,15 @@ export default function MainScreen() {
   const [lError, setLError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
-  const [showForgotPassword, setShowForgotPassword] = useState(false);
 
-  // forgot password state
-  const [forgotEmail, setForgotEmail] = useState('');
+  // forgot password state (same password rules as register)
+  const [forgotUsername, setForgotUsername] = useState('');
   const [forgotNewPassword, setForgotNewPassword] = useState('');
-  const [showForgotPasswordField, setShowForgotPasswordField] = useState(false);
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
+  const [showForgotNewPassword, setShowForgotNewPassword] = useState(false);
+  const [showForgotConfirmPassword, setShowForgotConfirmPassword] = useState(false);
   const [forgotError, setForgotError] = useState('');
-  const [forgotSuccess, setForgotSuccess] = useState('');
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
 
   // Animation values for button transitions
   const [registerScale] = useState(new Animated.Value(1));
@@ -228,6 +229,33 @@ export default function MainScreen() {
     if (/[^A-Za-z0-9]/.test(rPassword)) s++;
     return s; // 0..5
   })();
+
+  const forgotStrength = (() => {
+    let s = 0;
+    const p = forgotNewPassword;
+    if (p.length >= 8) s++;
+    if (/[A-Z]/.test(p)) s++;
+    if (/[a-z]/.test(p)) s++;
+    if (/[0-9]/.test(p)) s++;
+    if (/[^A-Za-z0-9]/.test(p)) s++;
+    return s;
+  })();
+
+  const passwordMeetsRegisterRules = (p) =>
+    p.length >= 8 &&
+    /[A-Z]/.test(p) &&
+    /[a-z]/.test(p) &&
+    /[0-9]/.test(p) &&
+    /[^A-Za-z0-9]/.test(p);
+
+  const clearForgotForm = () => {
+    setForgotUsername('');
+    setForgotNewPassword('');
+    setForgotConfirmPassword('');
+    setForgotError('');
+    setShowForgotNewPassword(false);
+    setShowForgotConfirmPassword(false);
+  };
 
   const onRegister = async () => {
     console.log('Register button pressed');
@@ -388,47 +416,37 @@ export default function MainScreen() {
   };
 
   const onResetPassword = async () => {
+    if (isResettingPassword) return;
     setForgotError('');
-    setForgotSuccess('');
 
-    if (!forgotEmail || !forgotNewPassword) {
+    const name = forgotUsername.trim();
+    if (!name || !forgotNewPassword || !forgotConfirmPassword) {
       setForgotError('Please fill all fields');
       return;
     }
+    if (!passwordMeetsRegisterRules(forgotNewPassword)) {
+      setForgotError('Password must meet all requirements below.');
+      return;
+    }
+    if (forgotNewPassword !== forgotConfirmPassword) {
+      setForgotError('Passwords do not match');
+      return;
+    }
 
+    setIsResettingPassword(true);
     try {
-      const saved = await AsyncStorage.getItem('registeredUsers');
-      if (!saved) {
-        setForgotError('No registered user found. Please register first.');
-        return;
-      }
-
-      const users = JSON.parse(saved);
-      const userIndex = users.findIndex((u) => u.email.toLowerCase() === forgotEmail.toLowerCase());
-
-      if (userIndex === -1) {
-        setForgotError('Email not found. Please check your email address.');
-        return;
-      }
-
-      // Update the password
-      users[userIndex].password = forgotNewPassword;
-      await AsyncStorage.setItem('registeredUsers', JSON.stringify(users));
-
-      setForgotSuccess('Password reset successfully! You can now login with your new password.');
-
-      // Clear fields after a delay
-      setTimeout(() => {
-        setForgotEmail('');
-        setForgotNewPassword('');
-        setForgotError('');
-        setForgotSuccess('');
-        setShowForgot(false);
-        setShowLogin(true);
-      }, 2000);
+      await authAPI.resetPassword(name, forgotNewPassword);
+      clearForgotForm();
+      setShowForgot(false);
+      setShowLogin(true);
+      setLName(name);
+      setLPassword('');
+      Alert.alert('Password updated', 'You can log in with your new password.');
     } catch (error) {
-      setForgotError('Error resetting password. Please try again.');
-      console.error('Error resetting password:', error);
+      const msg = error?.message || 'Could not reset password. Try again.';
+      setForgotError(msg);
+    } finally {
+      setIsResettingPassword(false);
     }
   };
 
@@ -1001,50 +1019,143 @@ export default function MainScreen() {
         </View>
       </Modal>
 
-      {/* Forgot Password Modal */}
-      <Modal transparent visible={showForgot} animationType="fade" onRequestClose={() => setShowForgot(false)}>
-        <View style={styles.overlay} pointerEvents="box-none">
-          <Pressable style={{ flex: 1, width: '100%', height: '100%' }} onPress={() => setShowForgot(false)} />
-          <View style={styles.modal} pointerEvents="auto">
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Forgot Password</Text>
-              <TouchableOpacity onPress={() => { setShowForgot(false); setForgotEmail(''); setForgotNewPassword(''); setForgotError(''); setForgotSuccess(''); }}><Text style={styles.close}>×</Text></TouchableOpacity>
-            </View>
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Email Address</Text>
-              <TextInput
-                style={styles.input}
-                keyboardType="email-address"
-                placeholder="Enter your email address"
-                placeholderTextColor="#888"
-                value={forgotEmail}
-                onChangeText={setForgotEmail}
-              />
-            </View>
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>New Password</Text>
-              <View style={styles.passwordContainer}>
-                <TextInput
-                  style={[styles.input, styles.passwordInput]}
-                  secureTextEntry={!showForgotPasswordField}
-                  placeholder="New password"
-                  placeholderTextColor="#888"
-                  value={forgotNewPassword}
-                  onChangeText={setForgotNewPassword}
-                />
-                <TouchableOpacity onPress={() => setShowForgotPasswordField(!showForgotPasswordField)} style={styles.eyeIcon}>
-                  <Text style={styles.eyeIconText}>{showForgotPasswordField ? '👁️' : '👁️‍🗨️'}</Text>
+      {/* Forgot Password — same layout feel as Login; password rules match Register */}
+      <Modal transparent visible={showForgot} animationType="fade" onRequestClose={() => { setShowForgot(false); clearForgotForm(); }}>
+        <KeyboardAvoidingView
+          style={styles.keyboardAvoidingRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
+        >
+          <View style={styles.registerOverlay} pointerEvents="box-none">
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={() => {
+                if (!isResettingPassword) {
+                  Keyboard.dismiss();
+                  setShowForgot(false);
+                  clearForgotForm();
+                }
+              }}
+            />
+            <View style={[styles.modal, styles.registerModal]} pointerEvents="auto">
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Reset password</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    if (!isResettingPassword) {
+                      setShowForgot(false);
+                      clearForgotForm();
+                    }
+                  }}
+                  disabled={isResettingPassword}
+                >
+                  <Text style={[styles.close, isResettingPassword && styles.closeDisabled]}>×</Text>
                 </TouchableOpacity>
               </View>
+              <ScrollView
+                style={styles.registerScroll}
+                contentContainerStyle={styles.registerScrollContent}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                showsVerticalScrollIndicator
+              >
+                <View style={styles.formGroup}>
+                  <Text style={styles.label}>Username</Text>
+                  <TextInput
+                    style={styles.input}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder="Your MatchMyTone username"
+                    placeholderTextColor="#888"
+                    value={forgotUsername}
+                    onChangeText={(t) => {
+                      setForgotUsername(t);
+                      setForgotError('');
+                    }}
+                  />
+                </View>
+                <View style={styles.formGroup}>
+                  <Text style={styles.label}>New password</Text>
+                  <View style={styles.passwordContainer}>
+                    <TextInput
+                      style={[styles.input, styles.passwordInput]}
+                      secureTextEntry={!showForgotNewPassword}
+                      placeholder="New password"
+                      placeholderTextColor="#888"
+                      value={forgotNewPassword}
+                      onChangeText={(t) => {
+                        setForgotNewPassword(t);
+                        setForgotError('');
+                      }}
+                    />
+                    <TouchableOpacity onPress={() => setShowForgotNewPassword(!showForgotNewPassword)} style={styles.eyeIcon}>
+                      <Text style={styles.eyeIconText}>{showForgotNewPassword ? '👁️' : '👁️‍🗨️'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.strengthBar}>
+                    <View style={[styles.strengthFill, { width: `${(forgotStrength / 5) * 100}%` }]} />
+                  </View>
+                  <Text style={styles.strengthText}>Password strength</Text>
+                  <View style={styles.reqList}>
+                    <Text style={[styles.req, forgotNewPassword.length >= 8 && styles.reqMet]}>• At least 8 characters</Text>
+                    <Text style={[styles.req, /[A-Z]/.test(forgotNewPassword) && styles.reqMet]}>• One uppercase letter</Text>
+                    <Text style={[styles.req, /[a-z]/.test(forgotNewPassword) && styles.reqMet]}>• One lowercase letter</Text>
+                    <Text style={[styles.req, /[0-9]/.test(forgotNewPassword) && styles.reqMet]}>• One number</Text>
+                    <Text style={[styles.req, /[^A-Za-z0-9]/.test(forgotNewPassword) && styles.reqMet]}>• One special character</Text>
+                  </View>
+                </View>
+                <View style={styles.formGroup}>
+                  <Text style={styles.label}>Confirm new password</Text>
+                  <View style={styles.passwordContainer}>
+                    <TextInput
+                      style={[styles.input, styles.passwordInput]}
+                      secureTextEntry={!showForgotConfirmPassword}
+                      placeholder="Confirm new password"
+                      placeholderTextColor="#888"
+                      value={forgotConfirmPassword}
+                      onChangeText={(t) => {
+                        setForgotConfirmPassword(t);
+                        setForgotError('');
+                      }}
+                    />
+                    <TouchableOpacity onPress={() => setShowForgotConfirmPassword(!showForgotConfirmPassword)} style={styles.eyeIcon}>
+                      <Text style={styles.eyeIconText}>{showForgotConfirmPassword ? '👁️' : '👁️‍🗨️'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                {!!forgotError && <Text style={styles.error}>{forgotError}</Text>}
+                <TouchableOpacity
+                  style={[styles.btn, styles.primary, styles.loginButton, isResettingPassword && { opacity: 0.85 }]}
+                  onPress={onResetPassword}
+                  disabled={isResettingPassword}
+                >
+                  {isResettingPassword ? (
+                    <View style={styles.registeringRow}>
+                      <ActivityIndicator color="#fff" size="small" />
+                      <Text style={[styles.btnText, styles.primaryText, styles.registeringLabel]}>Updating…</Text>
+                    </View>
+                  ) : (
+                    <Text style={[styles.btnText, styles.primaryText]}>Done</Text>
+                  )}
+                </TouchableOpacity>
+                <Text style={styles.footerNote}>
+                  <Text
+                    onPress={() => {
+                      if (!isResettingPassword) {
+                        setShowForgot(false);
+                        clearForgotForm();
+                        setShowLogin(true);
+                      }
+                    }}
+                    style={styles.link}
+                  >
+                    Back to Login
+                  </Text>
+                </Text>
+              </ScrollView>
             </View>
-            {!!forgotError && <Text style={styles.error}>{forgotError}</Text>}
-            {!!forgotSuccess && <Text style={[styles.error, { color: '#4CAF50' }]}>{forgotSuccess}</Text>}
-            <TouchableOpacity style={[styles.btn, styles.primary, styles.loginButton]} onPress={onResetPassword}>
-              <Text style={[styles.btnText, styles.primaryText]}>Reset Password</Text>
-            </TouchableOpacity>
-            <Text style={styles.footerNote}><Text onPress={() => { setShowForgot(false); setForgotEmail(''); setForgotNewPassword(''); setForgotError(''); setForgotSuccess(''); setShowLogin(true); }} style={styles.link}>Back to Login</Text></Text>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </LinearGradient>
   );

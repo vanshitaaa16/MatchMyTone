@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { quizAPI } from "../../../src/api";
-import { SHARE_ON_EMAIL_TO_ENCODED } from "../../../src/shareEmail";
+import { SHARE_MATCHMYTONE_FROM_LINE, getCurrentUserEmail } from "../../../src/shareEmail";
 import { useRouter } from "expo-router";
 import {
   TouchableOpacity,
@@ -264,14 +264,22 @@ export default function ResultScreen() {
     }
   }, [result, answersParam]);
 
-  const handleShareEmail = () => {
+  const handleShareEmail = async () => {
     if (!result) return;
+    const userEmail = await getCurrentUserEmail();
+    if (!userEmail) {
+      Alert.alert(
+        "Email needed",
+        "Add an email address to your profile so we can address this message to you."
+      );
+      return;
+    }
     const shape = SHAPE_DATA[result];
     if (!shape) return;
 
     const celeb = CELEB_DATA[result];
     const subject = `My Face Shape Analysis - ${result}`;
-    let body = "";
+    let body = `${SHARE_MATCHMYTONE_FROM_LINE}\n\n`;
 
     body += `Face Shape: ${result}\n`;
     body += `${shape.description}\n\n`;
@@ -302,7 +310,7 @@ export default function ResultScreen() {
 
     body += "\nDiscovered with MatchMyTone";
 
-    const mailtoUrl = `mailto:${SHARE_ON_EMAIL_TO_ENCODED}?subject=${encodeURIComponent(
+    const mailtoUrl = `mailto:${encodeURIComponent(userEmail)}?subject=${encodeURIComponent(
       subject
     )}&body=${encodeURIComponent(body)}`;
 

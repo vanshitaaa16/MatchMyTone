@@ -80,7 +80,9 @@ const warmUpBackend = async () => {
 };
 
 // Make API request with authentication
-const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth = true) => {
+// extra: { timeoutMs?: number } — default 15000; use longer for slow endpoints (e.g. email send)
+const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth = true, extra = {}) => {
+  const timeoutMs = typeof extra.timeoutMs === 'number' ? extra.timeoutMs : 15000;
   try {
     // Wake up backend if this is the first request (handles Render cold starts)
     await warmUpBackend();
@@ -90,7 +92,7 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
 
     // Create abort controller for timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     const options = {
       method,
@@ -120,7 +122,10 @@ const makeRequest = async (endpoint, method = 'GET', data = null, requiresAuth =
       response = await Promise.race([
         fetch(url, options),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Request timeout after 15 seconds')), 15000)
+          setTimeout(
+            () => reject(new Error(`Request timeout after ${Math.round(timeoutMs / 1000)} seconds`)),
+            timeoutMs
+          )
         )
       ]);
       clearTimeout(timeoutId); // Clear timeout if request completes
@@ -227,6 +232,17 @@ export const authAPI = {
       return response;
     } catch (error) {
       console.warn('Resend verification error:', error?.message || error);
+      throw error;
+    }
+  },
+
+  // Reset password (forgot password) — username + new password
+  resetPassword: async (name, password) => {
+    try {
+      const response = await makeRequest('/auth/reset-password', 'POST', { name, password }, false);
+      return response;
+    } catch (error) {
+      console.warn('Reset password error:', error?.message || error);
       throw error;
     }
   },
@@ -385,6 +401,17 @@ export const quizAPI = {
     try {
       const response = await makeRequest(`/quiz/color-analysis/${resultId}`, 'GET');
       return response;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  /** Sends HTML color analysis email From MatchMyTone (Resend). To = logged-in user's registered email. */
+  shareColorAnalysisByEmail: async (payload) => {
+    try {
+      return await makeRequest('/email/share-color-analysis', 'POST', payload, true, {
+        timeoutMs: 45000,
+      });
     } catch (error) {
       throw error;
     }

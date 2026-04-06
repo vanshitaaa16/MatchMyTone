@@ -9,12 +9,13 @@ import {
   StatusBar,
   Dimensions,
   Linking,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { quizAPI } from "../../../src/api";
-import { SHARE_ON_EMAIL_TO_ENCODED } from "../../../src/shareEmail";
+import { SHARE_EMAIL_BODY_PREFIX_CRLF, getCurrentUserEmail } from "../../../src/shareEmail";
 import * as Print from "expo-print";
 import { shareAsync } from "expo-sharing";
 
@@ -517,7 +518,7 @@ export default function ResultScreen() {
 
         {/* Share actions */}
         <View style={styles.shareRow}>
-          <TouchableOpacity style={styles.shareButton} onPress={() => handleEmailShare(skinType)}>
+          <TouchableOpacity style={styles.shareButton} onPress={() => void handleEmailShare(skinType)}>
             <Ionicons name="mail-outline" size={20} color="#2C2C2C" />
             <Text style={styles.shareButtonText}>Share on Email</Text>
           </TouchableOpacity>
@@ -531,10 +532,18 @@ export default function ResultScreen() {
   );
 }
 
-function handleEmailShare(skinType) {
+async function handleEmailShare(skinType) {
   if (!skinType) return;
+  const userEmail = await getCurrentUserEmail();
+  if (!userEmail) {
+    Alert.alert(
+      "Email needed",
+      "Add an email address to your profile so we can address this message to you."
+    );
+    return;
+  }
   const subject = encodeURIComponent("My Skincare Analysis - MatchMyTone");
-  let body = `My Skincare Analysis - MatchMyTone%0D%0A%0D%0A`;
+  let body = `${SHARE_EMAIL_BODY_PREFIX_CRLF}My Skincare Analysis - MatchMyTone%0D%0A%0D%0A`;
   body += `Skin Type: ${encodeURIComponent(SKIN_TYPES[skinType].name)}%0D%0A%0D%0A`;
   body += `${encodeURIComponent(SKIN_TYPE_DESCRIPTIONS[skinType])}%0D%0A%0D%0A`;
   body += `Key Concerns:%0D%0A`;
@@ -543,7 +552,7 @@ function handleEmailShare(skinType) {
   });
   body += `%0D%0A✨ Discovered with MatchMyTone ✨`;
 
-  const mailto = `mailto:${SHARE_ON_EMAIL_TO_ENCODED}?subject=${subject}&body=${body}`;
+  const mailto = `mailto:${encodeURIComponent(userEmail)}?subject=${subject}&body=${body}`;
   Linking.openURL(mailto).catch(() => { });
 }
 

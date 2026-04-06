@@ -3,7 +3,9 @@ from flask_cors import CORS
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from datetime import timedelta
+import html
 import os
+import re
 import uuid
 import resend
 from dotenv import load_dotenv
@@ -127,6 +129,87 @@ def send_verification_email(email, token):
         print(f"[EMAIL] Resend API key set: {bool(resend.api_key)}")
         print(f"[EMAIL] From email: {FROM_EMAIL}")
         return False
+
+
+def send_color_analysis_share_email(to_email, result_obj, colors_display=None):
+    """Email color analysis to the user using Resend (From = MatchMyTone domain)."""
+    if not resend.api_key or not FROM_EMAIL:
+        return False, 'Email service is not configured on the server.'
+    if not to_email:
+        return False, 'No recipient email.'
+
+    r = result_obj if isinstance(result_obj, dict) else {}
+    colors = colors_display if colors_display else r.get('colorsToWear') or []
+    colors = colors if isinstance(colors, list) else []
+
+    def esc(v):
+        return html.escape(str(v) if v is not None else '—')
+
+    season = esc(r.get('seasonType'))
+    season_desc = esc(r.get('seasonDescription') or '')
+    undertone = esc(r.get('undertone'))
+    undertone_desc = esc(r.get('undertoneDescription') or '')
+    skin_age = r.get('skinAge')
+    skin_age_desc = esc(r.get('skinAgeDescription') or '')
+
+    wear_html = ''
+    for i, c in enumerate(colors, 1):
+        if isinstance(c, dict):
+            wear_html += (
+                f'<tr><td style="padding:8px;border-bottom:1px solid #eee;">{i}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eee;">{esc(c.get("name"))}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eee;font-family:monospace;">{esc(c.get("hex", ""))}</td></tr>'
+            )
+
+    avoid_html = ''
+    for i, c in enumerate(r.get('colorsToAvoid') or [], 1):
+        if isinstance(c, dict):
+            avoid_html += (
+                f'<tr><td style="padding:8px;border-bottom:1px solid #eee;">{i}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eee;">{esc(c.get("name"))}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eee;font-family:monospace;">{esc(c.get("hex", ""))}</td></tr>'
+            )
+
+    age_block = ''
+    if skin_age is not None and str(skin_age).strip() != '':
+        age_block = f'<p><strong>Skin age (looks like)</strong>: {esc(skin_age)}</p>'
+    if skin_age_desc:
+        age_block += f'<p style="color:#555;">{skin_age_desc}</p>'
+
+    email_html = f'''
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:28px;background:#FFF8E7;border-radius:16px;">
+      <h1 style="color:#2C2C2C;font-size:22px;text-align:center;margin-bottom:8px;">MatchMyTone</h1>
+      <p style="color:#6B6B6B;text-align:center;font-size:14px;margin-bottom:24px;">Your color analysis</p>
+      <div style="background:#FFFFFF;border-radius:12px;padding:20px;border:1px solid #EAD9A1;">
+        <h2 style="color:#C24C4A;font-size:16px;margin-top:0;">Season</h2>
+        <p style="font-size:18px;font-weight:700;margin:4px 0;">{season}</p>
+        {f'<p style="color:#555;line-height:1.5;">{season_desc}</p>' if season_desc else ''}
+        <h2 style="color:#C24C4A;font-size:16px;margin-top:20px;">Undertone</h2>
+        <p style="font-size:16px;font-weight:700;margin:4px 0;">{undertone}</p>
+        {f'<p style="color:#555;line-height:1.5;">{undertone_desc}</p>' if undertone_desc else ''}
+        {age_block}
+        <h2 style="color:#C24C4A;font-size:16px;margin-top:20px;">Colors to wear</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">{wear_html or '<tr><td>—</td></tr>'}</table>
+        <h2 style="color:#C24C4A;font-size:16px;margin-top:20px;">Colors to avoid</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">{avoid_html or '<tr><td>—</td></tr>'}</table>
+      </div>
+      <p style="color:#A46B39;text-align:center;font-size:12px;margin-top:20px;">✨ Discovered with MatchMyTone ✨</p>
+    </div>
+    '''
+
+    try:
+        resend.Emails.send({
+            'from': FROM_EMAIL,
+            'to': [to_email.strip()],
+            'subject': 'My Color Analysis - MatchMyTone',
+            'html': email_html,
+        })
+        print(f"[EMAIL] Color analysis share sent to {to_email}")
+        return True, None
+    except Exception as e:
+        import traceback
+        print(f"[EMAIL] Color analysis share failed: {e}\n{traceback.format_exc()}")
+        return False, str(e)
 
 
 # Debug endpoint — remove after testing
@@ -335,6 +418,49 @@ def resend_verification():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+def _validate_password_strength(password):
+    """Same rules as registration / client: length, upper, lower, digit, special."""
+    if not password or len(password) < 8:
+        return 'Password must be at least 8 characters'
+    if not re.search(r'[A-Z]', password):
+        return 'Password must include an uppercase letter'
+    if not re.search(r'[a-z]', password):
+        return 'Password must include a lowercase letter'
+    if not re.search(r'[0-9]', password):
+        return 'Password must include a number'
+    if not re.search(r'[^A-Za-z0-9]', password):
+        return 'Password must include a special character'
+    return None
+
+
+@app.route('/api/auth/reset-password', methods=['POST'])
+def reset_password():
+    """Reset password by username (after Forgot Password). No auth token required."""
+    try:
+        data = request.get_json() or {}
+        name = (data.get('name') or '').strip()
+        password = data.get('password') or ''
+
+        if not name or not password:
+            return jsonify({'error': 'Username and new password are required'}), 400
+
+        pw_err = _validate_password_strength(password)
+        if pw_err:
+            return jsonify({'error': pw_err}), 400
+
+        user = User.query.filter(User.name.ilike(name)).first()
+        if not user:
+            return jsonify({'error': 'No account found with this username.'}), 404
+
+        user.password = bcrypt.generate_password_hash(password).decode('utf-8')
+        db.session.commit()
+
+        return jsonify({'message': 'Password updated. You can log in with your new password.'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -566,6 +692,35 @@ def get_quiz_results():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/email/share-color-analysis', methods=['POST'])
+@jwt_required()
+def share_color_analysis_email():
+    """Send color analysis email from MatchMyTone (Resend). To = user's registered email."""
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(int(user_id))
+        if not user or not user.email:
+            return jsonify({'error': 'User or email not found. Update your profile with an email address.'}), 400
+
+        data = request.get_json() or {}
+        result_payload = data.get('result')
+        if not result_payload:
+            return jsonify({'error': 'result payload is required'}), 400
+
+        colors_display = data.get('colorsToWearDisplay') or data.get('colors_to_wear_display')
+
+        ok, err = send_color_analysis_share_email(user.email, result_payload, colors_display)
+        if not ok:
+            return jsonify({'error': err or 'Could not send email'}), 500
+
+        return jsonify({
+            'message': 'We emailed your color analysis. Check your inbox (and spam).',
+            'to': user.email,
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/quiz/color-analysis', methods=['POST'])
 @jwt_required()

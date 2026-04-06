@@ -1,8 +1,3 @@
-// Gemini API key for Color Analysis. Do not commit this file (see .gitignore).
+// Same as app/ColorAnalysis/geminiConfig — key from root .env (EXPO_PUBLIC_GEMINI_API_KEY).
 
-export const GEMINI_API_KEY = 'AIzaSyAqLuxhbvx3jP96MnbknCcOMtytCskdcb4';
-
-
-
-
-
+export const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '';

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { quizAPI } from "../../../src/api";
-import { SHARE_ON_EMAIL_TO_ENCODED } from "../../../src/shareEmail";
+import { SHARE_EMAIL_BODY_PREFIX_CRLF, getCurrentUserEmail } from "../../../src/shareEmail";
 import { useRouter } from "expo-router";
-import { TouchableOpacity, Linking } from "react-native";
+import { TouchableOpacity, Linking, Alert } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import hourglassImg from "../../../assets/hourglass.png";
 import pearImg from "../../../assets/pear.png";
@@ -276,7 +276,7 @@ export default function ResultScreen() {
 
         {/* Share actions */}
         <View style={styles.shareRow}>
-          <TouchableOpacity style={styles.shareButton} onPress={() => handleEmailShare(result, shape)}>
+          <TouchableOpacity style={styles.shareButton} onPress={() => void handleEmailShare(result, shape)}>
             <Ionicons name="mail-outline" size={20} color="#2C2C2C" />
             <Text style={styles.shareButtonText}>Share on Email</Text>
           </TouchableOpacity>
@@ -290,10 +290,18 @@ export default function ResultScreen() {
   );
 }
 
-function handleEmailShare(result, shape) {
+async function handleEmailShare(result, shape) {
   if (!result || !shape) return;
+  const userEmail = await getCurrentUserEmail();
+  if (!userEmail) {
+    Alert.alert(
+      "Email needed",
+      "Add an email address to your profile so we can address this message to you."
+    );
+    return;
+  }
   const subject = encodeURIComponent("My Body Shape Analysis - MatchMyTone");
-  let body = `My Body Shape Analysis - MatchMyTone%0D%0A%0D%0A`;
+  let body = `${SHARE_EMAIL_BODY_PREFIX_CRLF}My Body Shape Analysis - MatchMyTone%0D%0A%0D%0A`;
   body += `Body Shape: ${encodeURIComponent(result)}%0D%0A%0D%0A`;
   body += `${encodeURIComponent(shape.description)}%0D%0A%0D%0A`;
   body += `Top Recommendations:%0D%0A`;
@@ -302,7 +310,7 @@ function handleEmailShare(result, shape) {
   });
   body += `%0D%0A✨ Discovered with MatchMyTone ✨`;
 
-  const mailto = `mailto:${SHARE_ON_EMAIL_TO_ENCODED}?subject=${subject}&body=${body}`;
+  const mailto = `mailto:${encodeURIComponent(userEmail)}?subject=${subject}&body=${body}`;
   Linking.openURL(mailto).catch(() => { });
 }
 

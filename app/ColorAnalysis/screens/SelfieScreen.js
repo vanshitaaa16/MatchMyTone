@@ -17,7 +17,7 @@ const { width, height } = Dimensions.get('window');
 
 const instructions = [
   '1. Stand in good light',
-  '2. Remove glasses & makeup',
+  '2. Remove makeup',
   '3. Keep your face straight',
 ];
 
