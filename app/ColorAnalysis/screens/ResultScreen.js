@@ -18,8 +18,6 @@ import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import { shareAsync } from 'expo-sharing';
-import { analyzeSkinImage } from '../services/colorAnalysisGemini';
-import { GEMINI_API_KEY } from '../geminiConfig';
 import { quizAPI } from '../../../src/api';
 
 const { width } = Dimensions.get('window');
@@ -188,10 +186,13 @@ export default function ResultScreen() {
         }
       }
 
-      const analysis = await analyzeSkinImage(base64, 'image/jpeg', GEMINI_API_KEY, {
+      const analysisResponse = await quizAPI.analyzeColorImage({
+        imageBase64: base64,
+        mimeType: 'image/jpeg',
         previousAnalysis: previousAnalysis || undefined,
         registeredGender: registeredGenderForApi || undefined,
       });
+      const analysis = analysisResponse?.analysis || analysisResponse;
 
       // Check gender mismatch: if face is detected, compare with registered user's gender
       if (analysis.isFace && analysis.detectedGender) {

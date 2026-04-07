@@ -4,8 +4,11 @@ from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from datetime import timedelta
 import html
+import json
 import os
 import re
+import urllib.error
+import urllib.request
 import uuid
 import resend
 from dotenv import load_dotenv
@@ -18,6 +21,7 @@ load_dotenv()
 # Configure Resend
 resend.api_key = (os.getenv('RESEND_API_KEY', '') or '').strip()
 FROM_EMAIL = (os.getenv('FROM_EMAIL', 'MatchMyTone <noreply@matchmytone.online>') or '').strip()
+GEMINI_API_KEY = (os.getenv('GEMINI_API_KEY', '') or '').strip()
 # Used to build the verification link sent by email.
 BACKEND_URL = (os.getenv('BACKEND_URL', 'https://matchmytone.onrender.com') or '').strip().rstrip('/')
 
@@ -210,6 +214,145 @@ def send_color_analysis_share_email(to_email, result_obj, colors_display=None):
         import traceback
         print(f"[EMAIL] Color analysis share failed: {e}\n{traceback.format_exc()}")
         return False, str(e)
+
+
+def _parse_gemini_json(text):
+    cleaned = (text or '').replace('```json', '').replace('```', '').strip()
+    start = cleaned.find('{')
+    end = cleaned.rfind('}')
+    if start != -1 and end != -1 and end > start:
+        cleaned = cleaned[start:end + 1]
+    return json.loads(cleaned)
+
+
+def _apply_repeat_consistency(parsed, previous_analysis, registered_gender):
+    if not isinstance(parsed, dict) or not parsed.get('isFace') or not isinstance(previous_analysis, dict):
+        return parsed
+
+    detected = str(parsed.get('detectedGender') or '').lower()
+    registered = str(registered_gender or '').lower()
+    if registered and detected and detected != registered:
+        return parsed
+
+    if previous_analysis.get('seasonType'):
+        parsed['seasonType'] = previous_analysis.get('seasonType')
+    if previous_analysis.get('undertone'):
+        parsed['undertone'] = previous_analysis.get('undertone')
+    if isinstance(previous_analysis.get('skinAge'), int):
+        parsed['skinAge'] = previous_analysis.get('skinAge')
+    if isinstance(previous_analysis.get('colorsToWear'), list) and len(previous_analysis.get('colorsToWear')) >= 6:
+        parsed['colorsToWear'] = previous_analysis.get('colorsToWear')[:6]
+    if isinstance(previous_analysis.get('colorsToAvoid'), list) and len(previous_analysis.get('colorsToAvoid')) >= 3:
+        parsed['colorsToAvoid'] = previous_analysis.get('colorsToAvoid')[:3]
+    return parsed
+
+
+def _build_color_analysis_prompt(previous_analysis=None):
+    repeat_block = ''
+    if isinstance(previous_analysis, dict) and (
+        previous_analysis.get('seasonType') or len(previous_analysis.get('colorsToWear') or []) >= 6
+    ):
+        repeat_block = f"""
+=== REPEAT ANALYSIS (same account) ===
+The user completed color analysis before. Use this prior result as ground truth unless this is clearly a different person.
+Previous JSON (must match for core fields):
+{json.dumps({
+    "seasonType": previous_analysis.get("seasonType"),
+    "undertone": previous_analysis.get("undertone"),
+    "skinAge": previous_analysis.get("skinAge"),
+    "colorsToWear": previous_analysis.get("colorsToWear"),
+    "colorsToAvoid": previous_analysis.get("colorsToAvoid"),
+})}
+Rules:
+- Keep seasonType, undertone, skinAge, colorsToWear(6), colorsToAvoid(3) same for repeat.
+- You may rewrite descriptions.
+- If clearly a different person, ignore this block.
+"""
+
+    return f"""
+You are an expert color analyst and personal stylist. Analyze this image.
+{repeat_block}
+If the image shows a CLEAR, WELL-LIT FACE:
+- Determine detectedGender: "male" or "female".
+- Determine seasonType and seasonDescription specific to this face.
+- Determine undertone ("Warm","Cool","Neutral") and undertoneDescription.
+- Estimate skinAge as an integer and skinAgeDescription.
+- Recommend 6 colorsToWear and 3 colorsToAvoid with {{name,hex}}.
+
+Return ONLY valid JSON:
+{{
+  "isFace": true,
+  "detectedGender": "female",
+  "seasonType": "Bright Winter",
+  "seasonDescription": "...",
+  "undertone": "Cool",
+  "undertoneDescription": "...",
+  "skinAge": 31,
+  "skinAgeDescription": "...",
+  "colorsToWear": [
+    {{ "name": "Berry", "hex": "#8E3B5A" }},
+    {{ "name": "Icy Gray", "hex": "#C5CED3" }},
+    {{ "name": "Royal Blue", "hex": "#2143A0" }},
+    {{ "name": "True Red", "hex": "#C41E3A" }},
+    {{ "name": "Charcoal", "hex": "#36454F" }},
+    {{ "name": "Emerald", "hex": "#287C5A" }}
+  ],
+  "colorsToAvoid": [
+    {{ "name": "Muted Beige", "hex": "#D8C8B0" }},
+    {{ "name": "Dusty Peach", "hex": "#E8B89A" }},
+    {{ "name": "Warm Camel", "hex": "#C19A6B" }}
+  ]
+}}
+
+If image is not a clear face, return only:
+{{ "isFace": false, "description": "A short playful message asking for a clear selfie." }}
+"""
+
+
+def _call_gemini_color_analysis(image_base64, mime_type, previous_analysis=None, registered_gender=None):
+    if not GEMINI_API_KEY:
+        raise ValueError('Gemini API key is missing on server.')
+
+    models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+    prompt = _build_color_analysis_prompt(previous_analysis)
+    last_error = None
+
+    for model in models:
+        url = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}'
+        payload = {
+            'contents': [{
+                'parts': [
+                    {'text': prompt},
+                    {'inlineData': {'mimeType': mime_type or 'image/jpeg', 'data': image_base64}},
+                ]
+            }],
+            'generationConfig': {
+                'temperature': 0.25 if previous_analysis else 0.92,
+                'topP': 0.95,
+            }
+        }
+
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            text_part = (((data.get('candidates') or [{}])[0].get('content') or {}).get('parts') or [{}])[0].get('text')
+            parsed = _parse_gemini_json(text_part)
+            return _apply_repeat_consistency(parsed, previous_analysis, registered_gender)
+        except Exception as e:
+            msg = str(e)
+            last_error = e
+            if '404' in msg or 'not found' in msg:
+                continue
+    if last_error:
+        raise last_error
+    raise RuntimeError('Color analysis failed')
 
 
 # Debug endpoint — remove after testing
@@ -718,6 +861,31 @@ def share_color_analysis_email():
             'message': 'We emailed your color analysis. Check your inbox (and spam).',
             'to': user.email,
         }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/color-analysis/analyze', methods=['POST'])
+@jwt_required()
+def analyze_color_image_server_side():
+    """Analyze face image via Gemini on the backend (key stays server-side)."""
+    try:
+        data = request.get_json() or {}
+        image_base64 = data.get('imageBase64') or data.get('image_base64')
+        mime_type = data.get('mimeType') or data.get('mime_type') or 'image/jpeg'
+        previous_analysis = data.get('previousAnalysis') or data.get('previous_analysis')
+        registered_gender = data.get('registeredGender') or data.get('registered_gender')
+
+        if not image_base64:
+            return jsonify({'error': 'imageBase64 is required'}), 400
+
+        analysis = _call_gemini_color_analysis(
+            image_base64=image_base64,
+            mime_type=mime_type,
+            previous_analysis=previous_analysis if isinstance(previous_analysis, dict) else None,
+            registered_gender=registered_gender,
+        )
+        return jsonify({'analysis': analysis}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

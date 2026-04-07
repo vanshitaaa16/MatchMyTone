@@ -396,6 +396,17 @@ export const quizAPI = {
     }
   },
 
+  // Run color analysis on backend (Gemini key stays server-side)
+  analyzeColorImage: async (payload) => {
+    try {
+      return await makeRequest('/color-analysis/analyze', 'POST', payload, true, {
+        timeoutMs: 60000,
+      });
+    } catch (error) {
+      throw error;
+    }
+  },
+
   // Get a specific color analysis result by ID
   getColorAnalysisById: async (resultId) => {
     try {
