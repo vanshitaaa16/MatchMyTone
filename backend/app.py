@@ -319,11 +319,17 @@ def _call_gemini_color_analysis(image_base64, mime_type, previous_analysis=None,
 
     for model in models:
         url = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}'
+        # REST API expects snake_case (inline_data, mime_type), not SDK camelCase.
         payload = {
             'contents': [{
                 'parts': [
                     {'text': prompt},
-                    {'inlineData': {'mimeType': mime_type or 'image/jpeg', 'data': image_base64}},
+                    {
+                        'inline_data': {
+                            'mime_type': mime_type or 'image/jpeg',
+                            'data': image_base64,
+                        }
+                    },
                 ]
             }],
             'generationConfig': {
