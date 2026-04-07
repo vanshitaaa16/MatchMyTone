@@ -19,6 +19,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import { shareAsync } from 'expo-sharing';
 import { quizAPI } from '../../../src/api';
+import { GEMINI_API_KEY } from '../geminiConfig';
+import { analyzeSkinImage } from '../services/colorAnalysisGemini';
 
 const { width } = Dimensions.get('window');
 const CARD_PADDING = 14;
@@ -186,13 +188,17 @@ export default function ResultScreen() {
         }
       }
 
-      const analysisResponse = await quizAPI.analyzeColorImage({
-        imageBase64: base64,
-        mimeType: 'image/jpeg',
+      const key = (GEMINI_API_KEY || '').trim();
+      if (!key) {
+        throw new Error(
+          'Gemini API key is missing. Set EXPO_PUBLIC_GEMINI_API_KEY in the project root .env and restart Expo (npx expo start -c).'
+        );
+      }
+
+      const analysis = await analyzeSkinImage(base64, 'image/jpeg', key, {
         previousAnalysis: previousAnalysis || undefined,
         registeredGender: registeredGenderForApi || undefined,
       });
-      const analysis = analysisResponse?.analysis || analysisResponse;
 
       // Check gender mismatch: if face is detected, compare with registered user's gender
       if (analysis.isFace && analysis.detectedGender) {
