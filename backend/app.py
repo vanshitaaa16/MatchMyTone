@@ -5,11 +5,13 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 from datetime import timedelta
 import html
 import json
+import base64
 import os
 import re
-import urllib.error
-import urllib.request
 import uuid
+
+from google import genai
+from google.genai import types as genai_types
 import resend
 from dotenv import load_dotenv
 from models import db, User, QuizResult, ColorAnalysisResult
@@ -309,56 +311,92 @@ If image is not a clear face, return only:
 """
 
 
+_gemini_client = None
+
+
+def _get_gemini_client():
+    """Single client; uses official SDK so URLs, auth, and model names stay correct (avoids REST 404s)."""
+    global _gemini_client
+    if _gemini_client is None:
+        _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    return _gemini_client
+
+
+def _gemini_response_text(response):
+    """Prefer SDK .text; fall back to candidates if needed."""
+    t = getattr(response, 'text', None)
+    if t:
+        return t
+    for c in getattr(response, 'candidates', None) or []:
+        content = getattr(c, 'content', None)
+        parts = getattr(content, 'parts', None) if content else None
+        for p in parts or []:
+            pt = getattr(p, 'text', None)
+            if pt:
+                return pt
+    return ''
+
+
 def _call_gemini_color_analysis(image_base64, mime_type, previous_analysis=None, registered_gender=None):
     if not GEMINI_API_KEY:
         raise ValueError('Gemini API key is missing on server.')
 
-    models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+    raw = (image_base64 or '').strip()
+    if raw.startswith('data:'):
+        raw = raw.split(',', 1)[-1]
+    try:
+        image_bytes = base64.b64decode(raw, validate=False)
+    except Exception as e:
+        raise ValueError('Invalid image data.') from e
+    if not image_bytes:
+        raise ValueError('Empty image data.')
+
+    # Order: stable models first for Google AI Studio keys; SDK resolves the correct endpoint.
+    models = [
+        'gemini-2.0-flash',
+        'gemini-2.5-flash',
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+    ]
     prompt = _build_color_analysis_prompt(previous_analysis)
+    config = genai_types.GenerateContentConfig(
+        temperature=0.25 if previous_analysis else 0.92,
+        top_p=0.95,
+    )
+    client = _get_gemini_client()
     last_error = None
 
-    for model in models:
-        url = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}'
-        # REST API expects snake_case (inline_data, mime_type), not SDK camelCase.
-        payload = {
-            'contents': [{
-                'parts': [
-                    {'text': prompt},
-                    {
-                        'inline_data': {
-                            'mime_type': mime_type or 'image/jpeg',
-                            'data': image_base64,
-                        }
-                    },
-                ]
-            }],
-            'generationConfig': {
-                'temperature': 0.25 if previous_analysis else 0.92,
-                'topP': 0.95,
-            }
-        }
-
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode('utf-8'),
-            headers={'Content-Type': 'application/json'},
-            method='POST',
-        )
-
+    for model_id in models:
         try:
-            with urllib.request.urlopen(req, timeout=45) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            text_part = (((data.get('candidates') or [{}])[0].get('content') or {}).get('parts') or [{}])[0].get('text')
+            response = client.models.generate_content(
+                model=model_id,
+                contents=[
+                    genai_types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type=mime_type or 'image/jpeg',
+                    ),
+                    prompt,
+                ],
+                config=config,
+            )
+            text_part = _gemini_response_text(response)
+            if not (text_part or '').strip():
+                last_error = RuntimeError('Empty response from Gemini.')
+                continue
             parsed = _parse_gemini_json(text_part)
             return _apply_repeat_consistency(parsed, previous_analysis, registered_gender)
         except Exception as e:
-            msg = str(e)
+            msg = str(e).lower()
             last_error = e
-            if '404' in msg or 'not found' in msg:
+            if any(
+                x in msg
+                for x in ('404', 'not found', 'not supported', 'does not exist', 'invalid model', 'unknown model')
+            ):
                 continue
+            raise
     if last_error:
         raise last_error
-    raise RuntimeError('Color analysis failed')
+    raise RuntimeError('Color analysis failed: no model responded.')
 
 
 # Debug endpoint — remove after testing
